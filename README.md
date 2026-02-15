@@ -18,7 +18,26 @@ This produces:
 
 `dist/SrizonVoice.app`
 
+## Create distributable DMG
+
+```bash
+./scripts/create-dmg.sh
+```
+
+This produces:
+
+- `dist/SrizonVoice-0.1.0.dmg` — Installer disk image
+- `dist/SrizonVoice-0.1.0.sha256` — Checksum for verification
+
 ## Install
+
+From DMG (recommended):
+
+1. Open `SrizonVoice-0.1.0.dmg`
+2. Drag `SrizonVoice.app` to the `Applications` folder
+3. Launch from Applications or Spotlight
+
+From script:
 
 ```bash
 ./scripts/install-app.sh
@@ -45,6 +64,12 @@ Then launch `SrizonVoice` from Applications or Spotlight.
 - Optional secondary language support with automatic code-switching
 - First-run onboarding (API key, shortcut, permission checks)
 - Reconnect handling (up to 3 retries) with UI indicator
+
+## Privacy
+
+SrizonVoice processes audio locally and streams it directly to Gladia's servers using your personal API key. No data passes through Srizon servers. Audio is only sent when you actively trigger dictation.
+
+**Privacy Policy:** [https://www.srizon.com/privacy](https://www.srizon.com/privacy)
 
 ## Cleanup
 
