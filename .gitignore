@@ -3,3 +3,5 @@
 .swiftpm/
 DerivedData/
 dist/
+temp
+.idea

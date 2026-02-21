@@ -4,71 +4,175 @@ import Carbon
 
 // MARK: - GlobalHotKeyMonitor
 
+/// Monitors a global hotkey with press-and-release semantics using a unified CGEvent tap.
+/// Supports regular key+modifier combos, modifier-only combos, and the Fn/Globe key.
+/// `onKeyDown` fires when the hotkey is pressed, `onKeyUp` when released.
+///
+/// Uses `.cgSessionEventTap` + `.headInsertEventTap` for highest-priority system-wide
+/// interception, and a watchdog timer to re-enable the tap if macOS silently disables it.
 final class GlobalHotKeyMonitor {
-    private var hotKeyRef: EventHotKeyRef?
-    private var eventHandlerRef: EventHandlerRef?
-    private var callback: (() -> Void)?
-    private let signature = OSType(0x53564F58) // SVOX
-    private let hotKeyID = UInt32(1)
+    var onKeyDown: (() -> Void)?
+    var onKeyUp: (() -> Void)?
 
-    func register(hotKey: HotKey, callback: @escaping () -> Void) throws {
+    private var eventTap: CFMachPort?
+    private var runLoopSource: CFRunLoopSource?
+    private var registeredHotKey: HotKey?
+    private var isDown = false
+    private var watchdogTimer: Timer?
+
+    func register(hotKey: HotKey) throws {
         unregister()
-        self.callback = callback
+        registeredHotKey = hotKey
 
-        let hotKeyID = EventHotKeyID(signature: signature, id: self.hotKeyID)
-        let status = RegisterEventHotKey(
-            hotKey.keyCode,
-            hotKey.modifiers,
-            hotKeyID,
-            GetApplicationEventTarget(),
-            0,
-            &hotKeyRef
-        )
-        guard status == noErr else { throw HotKeyError.registrationFailed }
+        // Always listen for ALL event types so we never miss an event,
+        // regardless of hotkey kind (Fn, modifier-only, or regular key).
+        let mask: CGEventMask =
+              CGEventMask(1 << CGEventType.keyDown.rawValue)
+            | CGEventMask(1 << CGEventType.keyUp.rawValue)
+            | CGEventMask(1 << CGEventType.flagsChanged.rawValue)
 
-        var eventSpec = EventTypeSpec(
-            eventClass: OSType(kEventClassKeyboard),
-            eventKind: UInt32(kEventHotKeyPressed)
-        )
-        let pointer = UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
-        InstallEventHandler(
-            GetApplicationEventTarget(),
-            { _, eventRef, userData -> OSStatus in
-                guard let eventRef, let userData else { return noErr }
-                var hkID = EventHotKeyID()
-                let result = GetEventParameter(
-                    eventRef,
-                    EventParamName(kEventParamDirectObject),
-                    EventParamType(typeEventHotKeyID),
-                    nil,
-                    MemoryLayout<EventHotKeyID>.size,
-                    nil,
-                    &hkID
-                )
-                guard result == noErr else { return noErr }
-                let monitor = Unmanaged<GlobalHotKeyMonitor>.fromOpaque(userData).takeUnretainedValue()
-                if hkID.signature == monitor.signature && hkID.id == monitor.hotKeyID {
-                    monitor.callback?()
+        let userInfo = Unmanaged.passUnretained(self).toOpaque()
+        guard let tap = CGEvent.tapCreate(
+            tap: .cgSessionEventTap,
+            place: .headInsertEventTap,
+            options: .listenOnly,
+            eventsOfInterest: mask,
+            callback: { _, type, event, userInfo -> Unmanaged<CGEvent>? in
+                guard let userInfo else { return Unmanaged.passUnretained(event) }
+                let monitor = Unmanaged<GlobalHotKeyMonitor>.fromOpaque(userInfo).takeUnretainedValue()
+
+                // Re-enable tap if macOS disabled it
+                if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+                    if let tap = monitor.eventTap {
+                        CGEvent.tapEnable(tap: tap, enable: true)
+                    }
+                    return Unmanaged.passUnretained(event)
                 }
-                return noErr
+
+                guard let hotKey = monitor.registeredHotKey else {
+                    return Unmanaged.passUnretained(event)
+                }
+
+                if hotKey.isFnKey {
+                    monitor.handleFnKey(type: type, event: event)
+                } else if hotKey.isModifierOnly {
+                    monitor.handleModifierOnly(event: event, hotKey: hotKey)
+                } else {
+                    monitor.handleRegularKey(type: type, event: event, hotKey: hotKey)
+                }
+
+                return Unmanaged.passUnretained(event)
             },
-            1,
-            &eventSpec,
-            pointer,
-            &eventHandlerRef
-        )
+            userInfo: userInfo
+        ) else { throw HotKeyError.registrationFailed }
+
+        eventTap = tap
+        let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
+        runLoopSource = source
+        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
+        CGEvent.tapEnable(tap: tap, enable: true)
+
+        // Watchdog: periodically ensure the tap stays enabled.
+        // macOS can silently disable taps under load or after sleep.
+        watchdogTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+            guard let self, let tap = self.eventTap else { return }
+            if !CGEvent.tapIsEnabled(tap: tap) {
+                CGEvent.tapEnable(tap: tap, enable: true)
+            }
+        }
     }
 
+    // MARK: - Event handlers
+
+    private func handleFnKey(type: CGEventType, event: CGEvent) {
+        // The Fn/Globe key can arrive as either flagsChanged (modifier flag)
+        // or keyDown/keyUp with key code 63, depending on macOS version and
+        // System Settings > Keyboard configuration.
+        if type == .flagsChanged {
+            let isFnDown = event.flags.contains(.maskSecondaryFn)
+            if isFnDown && !isDown {
+                isDown = true
+                onKeyDown?()
+            } else if !isFnDown && isDown {
+                isDown = false
+                onKeyUp?()
+            }
+        } else {
+            let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
+            if keyCode == 63 { // Fn/Globe key code
+                if type == .keyDown && !isDown {
+                    isDown = true
+                    onKeyDown?()
+                } else if type == .keyUp && isDown {
+                    isDown = false
+                    onKeyUp?()
+                }
+            }
+        }
+    }
+
+    private func handleModifierOnly(event: CGEvent, hotKey: HotKey) {
+        let currentMods = Self.carbonModifiers(from: event.flags)
+        let required = hotKey.modifiers
+        let allHeld = (currentMods & required) == required
+        if allHeld && !isDown {
+            isDown = true
+            onKeyDown?()
+        } else if !allHeld && isDown {
+            isDown = false
+            onKeyUp?()
+        }
+    }
+
+    private func handleRegularKey(type: CGEventType, event: CGEvent, hotKey: HotKey) {
+        let keyCode = UInt32(event.getIntegerValueField(.keyboardEventKeycode))
+
+        if type == .keyDown && !isDown && keyCode == hotKey.keyCode {
+            let currentMods = Self.carbonModifiers(from: event.flags)
+            let required = hotKey.modifiers
+            if (currentMods & required) == required {
+                isDown = true
+                onKeyDown?()
+            }
+        } else if type == .keyUp && isDown && keyCode == hotKey.keyCode {
+            isDown = false
+            onKeyUp?()
+        } else if type == .flagsChanged && isDown {
+            // Modifier released while key is held — stop recording
+            let currentMods = Self.carbonModifiers(from: event.flags)
+            let required = hotKey.modifiers
+            if (currentMods & required) != required {
+                isDown = false
+                onKeyUp?()
+            }
+        }
+    }
+
+    private static func carbonModifiers(from flags: CGEventFlags) -> UInt32 {
+        var value: UInt32 = 0
+        if flags.contains(.maskCommand) { value |= UInt32(cmdKey) }
+        if flags.contains(.maskShift) { value |= UInt32(shiftKey) }
+        if flags.contains(.maskAlternate) { value |= UInt32(optionKey) }
+        if flags.contains(.maskControl) { value |= UInt32(controlKey) }
+        return value
+    }
+
+    // MARK: - Teardown
+
     func unregister() {
-        if let hotKeyRef {
-            UnregisterEventHotKey(hotKeyRef)
+        watchdogTimer?.invalidate()
+        watchdogTimer = nil
+        if let tap = eventTap {
+            CGEvent.tapEnable(tap: tap, enable: false)
+            CFMachPortInvalidate(tap)
         }
-        if let eventHandlerRef {
-            RemoveEventHandler(eventHandlerRef)
+        if let source = runLoopSource {
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
         }
-        hotKeyRef = nil
-        eventHandlerRef = nil
-        callback = nil
+        eventTap = nil
+        runLoopSource = nil
+        registeredHotKey = nil
+        isDown = false
     }
 }
 
@@ -128,118 +232,5 @@ final class GlobalEscapeKeyMonitor {
         }
         eventTap = nil
         runLoopSource = nil
-    }
-}
-
-// MARK: - DoubleClickTextMonitor
-
-/// Listens for double-clicks on text-editable elements and invokes a callback.
-/// Uses CGEvent tap (works with Accessibility permission; no Input Monitoring needed).
-final class DoubleClickTextMonitor {
-    var onDoubleClickOnText: ((NSPoint) -> Void)?
-
-    private var eventTap: CFMachPort?
-    private var runLoopSource: CFRunLoopSource?
-
-    func start() {
-        stop()
-        let mask: CGEventMask = (1 << CGEventType.leftMouseDown.rawValue)
-        let userInfo = Unmanaged.passUnretained(self).toOpaque()
-        guard let tap = CGEvent.tapCreate(
-            tap: .cgSessionEventTap,
-            place: .headInsertEventTap,
-            options: .listenOnly,
-            eventsOfInterest: mask,
-            callback: { _, type, event, userInfo -> Unmanaged<CGEvent>? in
-                guard let userInfo else { return Unmanaged.passUnretained(event) }
-                if type == .leftMouseDown {
-                    let monitor = Unmanaged<DoubleClickTextMonitor>.fromOpaque(userInfo).takeUnretainedValue()
-                    let clickCount = Int(event.getIntegerValueField(.mouseEventClickState))
-                    if clickCount == 2 {
-                        let loc = event.location
-                        let point = NSPoint(x: loc.x, y: loc.y)
-                        if monitor.isTextElement(at: point) {
-                            DispatchQueue.main.async { monitor.onDoubleClickOnText?(point) }
-                        }
-                    }
-                }
-                return Unmanaged.passUnretained(event)
-            },
-            userInfo: userInfo
-        ) else { return }
-        eventTap = tap
-        let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
-        runLoopSource = source
-        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
-        CGEvent.tapEnable(tap: tap, enable: true)
-    }
-
-    func stop() {
-        if let tap = eventTap {
-            CGEvent.tapEnable(tap: tap, enable: false)
-            CFMachPortInvalidate(tap)
-        }
-        if let source = runLoopSource {
-            CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
-        }
-        eventTap = nil
-        runLoopSource = nil
-    }
-
-    private func isTextElement(at point: NSPoint) -> Bool {
-        let systemWide = AXUIElementCreateSystemWide()
-        var elementRef: AXUIElement?
-        guard AXUIElementCopyElementAtPosition(systemWide, Float(point.x), Float(point.y), &elementRef) == .success,
-              let axElement = elementRef
-        else { return false }
-        return hasTextRole(axElement) || hasEditableText(axElement)
-    }
-
-    private func hasTextRole(_ element: AXUIElement) -> Bool {
-        var roleRef: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &roleRef) == .success,
-              let role = roleRef as? String
-        else { return false }
-        let textRoles = [
-            kAXTextFieldRole,
-            kAXTextAreaRole,
-            kAXComboBoxRole,
-            "AXWebArea",
-        ]
-        return textRoles.contains(role)
-    }
-
-    private func hasEditableText(_ element: AXUIElement) -> Bool {
-        // Check if element has kAXSelectedTextAttribute or kAXValueAttribute (indicates editability)
-        var selectedTextRef: CFTypeRef?
-        if AXUIElementCopyAttributeValue(element, kAXSelectedTextAttribute as CFString, &selectedTextRef) == .success {
-            return true
-        }
-        var valueRef: CFTypeRef?
-        if AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &valueRef) == .success {
-            return true
-        }
-        return tryDescendantsForEditableText(element, depth: 0)
-    }
-
-    private func tryDescendantsForEditableText(_ element: AXUIElement, depth: Int) -> Bool {
-        guard depth < 3 else { return false }
-        var childrenRef: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &childrenRef) == .success,
-              let children = childrenRef as? [AXUIElement]
-        else { return false }
-        for child in children {
-            // Check if child has editable attributes
-            var selectedTextRef: CFTypeRef?
-            if AXUIElementCopyAttributeValue(child, kAXSelectedTextAttribute as CFString, &selectedTextRef) == .success {
-                return true
-            }
-            var valueRef: CFTypeRef?
-            if AXUIElementCopyAttributeValue(child, kAXValueAttribute as CFString, &valueRef) == .success {
-                return true
-            }
-            if tryDescendantsForEditableText(child, depth: depth + 1) { return true }
-        }
-        return false
     }
 }

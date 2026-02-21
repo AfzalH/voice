@@ -2,7 +2,6 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-APP_PATH="$ROOT_DIR/dist/SrizonVoice.app"
 TARGET_PATH="/Applications/SrizonVoice.app"
 BUNDLE_ID="com.srizon.voice"
 
@@ -48,16 +47,3 @@ osascript -e 'tell application "System Events" to delete (login items whose name
     && echo "  Removed Login Items entry" || true
 
 echo "  Cleanup done."
-echo ""
-
-# -- Build and install --
-
- "$ROOT_DIR/scripts/build-app.sh"
-
- echo "Installing to /Applications..."
- cp -R "$APP_PATH" "$TARGET_PATH"
-
- echo ""
- echo "Installed:"
- echo "  $TARGET_PATH"
- echo "You can launch it from Spotlight or Applications."

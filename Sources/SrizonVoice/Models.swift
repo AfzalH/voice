@@ -218,19 +218,36 @@ enum LanguageOption: String, CaseIterable, Codable {
 struct HotKey: Codable, Equatable {
     var keyCode: UInt32
     var modifiers: UInt32
+    var isFnKey: Bool
+    var isModifierOnly: Bool
 
-    static let defaultValue = HotKey(
-        keyCode: 6, // Z
-        modifiers: UInt32(optionKey)
-    )
+    init(keyCode: UInt32, modifiers: UInt32, isFnKey: Bool = false, isModifierOnly: Bool = false) {
+        self.keyCode = keyCode
+        self.modifiers = modifiers
+        self.isFnKey = isFnKey
+        self.isModifierOnly = isModifierOnly
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        keyCode = try container.decode(UInt32.self, forKey: .keyCode)
+        modifiers = try container.decode(UInt32.self, forKey: .modifiers)
+        isFnKey = try container.decodeIfPresent(Bool.self, forKey: .isFnKey) ?? false
+        isModifierOnly = try container.decodeIfPresent(Bool.self, forKey: .isModifierOnly) ?? false
+    }
+
+    static let defaultValue = HotKey(keyCode: 63, modifiers: 0, isFnKey: true) // fn key
 
     var displayString: String {
+        if isFnKey { return "fn" }
         var pieces: [String] = []
         if modifiers & UInt32(cmdKey) != 0 { pieces.append("⌘") }
         if modifiers & UInt32(shiftKey) != 0 { pieces.append("⇧") }
         if modifiers & UInt32(optionKey) != 0 { pieces.append("⌥") }
         if modifiers & UInt32(controlKey) != 0 { pieces.append("⌃") }
-        pieces.append(KeyCodeMap.displayName(for: keyCode))
+        if !isModifierOnly {
+            pieces.append(KeyCodeMap.displayName(for: keyCode))
+        }
         return pieces.joined(separator: "")
     }
 }
@@ -301,20 +318,36 @@ enum KeyCodeMap {
     }
 }
 
+// MARK: - TranscriptionModel
+
+enum TranscriptionModel: String, CaseIterable, Codable {
+    case whisperTurbo = "whisper-large-v3-turbo"
+    case whisperV3    = "whisper-large-v3"
+
+    var displayName: String {
+        switch self {
+        case .whisperTurbo: return "Whisper Large v3 Turbo (Fast)"
+        case .whisperV3:    return "Whisper Large v3 (Accurate)"
+        }
+    }
+}
+
 // MARK: - UserSettings
 
 final class UserSettings {
     private enum Key {
-        static let apiKey = "gladia.apiKey"
-        static let hotKey = "app.hotKey"
-        static let language = "dictation.language"
-        static let secondaryLanguage = "dictation.secondaryLanguage"
+        static let apiKey             = "groq.apiKey"
+        static let hotKey             = "app.hotKey"
+        static let language           = "dictation.language"
+        static let secondaryLanguage  = "dictation.secondaryLanguage"
+        static let transcriptionModel = "groq.transcriptionModel"
     }
 
     var apiKey = ""
     var hotKey = HotKey.defaultValue
     var language: LanguageOption = .english
     var secondaryLanguage: LanguageOption?
+    var transcriptionModel: TranscriptionModel = .whisperTurbo
 
     func load() {
         let defaults = UserDefaults.standard
@@ -335,12 +368,18 @@ final class UserSettings {
         {
             secondaryLanguage = option
         }
+        if let raw = defaults.string(forKey: Key.transcriptionModel),
+           let model = TranscriptionModel(rawValue: raw)
+        {
+            transcriptionModel = model
+        }
     }
 
     func save() {
         let defaults = UserDefaults.standard
         defaults.set(apiKey, forKey: Key.apiKey)
         defaults.set(language.rawValue, forKey: Key.language)
+        defaults.set(transcriptionModel.rawValue, forKey: Key.transcriptionModel)
         if let secondary = secondaryLanguage {
             defaults.set(secondary.rawValue, forKey: Key.secondaryLanguage)
         } else {
@@ -358,16 +397,18 @@ enum DictationError: LocalizedError {
     case invalidURL
     case invalidResponse
     case invalidAPIKey
-    case sessionInitializationFailed
     case audioFormatCreationFailed
+    case transcriptionFailed
+    case serverError(String)
 
     var errorDescription: String? {
         switch self {
-        case .invalidURL: return "Invalid API URL."
-        case .invalidResponse: return "Invalid network response."
-        case .invalidAPIKey: return "Invalid API key. Check Settings."
-        case .sessionInitializationFailed: return "Could not start a Gladia session."
+        case .invalidURL:                return "Invalid API URL."
+        case .invalidResponse:           return "Invalid network response."
+        case .invalidAPIKey:             return "Invalid API key. Check Settings."
         case .audioFormatCreationFailed: return "Could not configure audio capture."
+        case .transcriptionFailed:       return "Transcription failed."
+        case .serverError(let message):  return message
         }
     }
 }

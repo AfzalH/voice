@@ -14,6 +14,10 @@ final class PermissionManager {
         AXIsProcessTrusted()
     }
 
+    var inputMonitoringPermissionGranted: Bool {
+        CGPreflightListenEventAccess()
+    }
+
     func requestMicrophonePermission() async -> Bool {
         let status = AVCaptureDevice.authorizationStatus(for: .audio)
         switch status {
@@ -27,12 +31,15 @@ final class PermissionManager {
         let opts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: prompt] as CFDictionary
         return AXIsProcessTrustedWithOptions(opts)
     }
+
+    func requestInputMonitoringPermission() {
+        CGRequestListenEventAccess()
+    }
 }
 
 // MARK: - CaretPositionHelper
 
 /// Returns the focused caret's position in screen coordinates, or nil if unavailable.
-/// Some apps (e.g. Electron) may return invalid coordinates.
 enum CaretPositionHelper {
     static func getFocusedCaretScreenPoint() -> NSPoint? {
         let systemWide = AXUIElementCreateSystemWide()
@@ -46,7 +53,6 @@ enum CaretPositionHelper {
 
         let rect = getCaretBounds(from: element) ?? getElementBounds(from: element)
         guard let rect else { return nil }
-        // Reject obviously wrong values (e.g. Electron returning 0, screenHeight)
         guard rect.origin.x > 0 || rect.origin.y > 0 else { return nil }
         let screenHeight = NSScreen.screens.map(\.frame).reduce(0) { max($0, $1.maxY) }
         guard rect.origin.y < screenHeight - 5 else { return nil }
@@ -61,7 +67,6 @@ enum CaretPositionHelper {
         else { return nil }
         var cfRange = CFRange(location: 0, length: 0)
         guard AXValueGetValue(rangeVal as! AXValue, .cfRange, &cfRange) else { return nil }
-        // Use range (location, 1) to get bounds of char at caret; length 0 often fails
         var queryRange = CFRange(location: cfRange.location, length: max(1, cfRange.length))
         var rangeValue: CFTypeRef?
         guard let axRange = AXValueCreate(.cfRange, &queryRange) else { return nil }
@@ -100,90 +105,113 @@ enum CaretPositionHelper {
 final class DictationCoordinator {
     var onAudioLevel: ((Float) -> Void)?
     var onError: ((String) -> Void)?
-    var onReconnectState: ((Bool) -> Void)?
+    var onTranscribing: ((Bool) -> Void)?
 
     private let settings: UserSettings
     private let insertionService: TextInsertionService
     private let audioCapture = AudioCaptureService()
-    private let gladiaClient = GladiaRealtimeClient()
+    private let groqClient = GroqTranscriptionClient()
     private var isRunning = false
 
-    /// Latest partial transcript text that hasn't been finalized yet.
-    /// Accessed only on the main thread.
-    private var lastPartialText: String = ""
+    /// Accumulated audio data from the recording session.
+    private var audioBuffer = Data()
+    private let bufferQueue = DispatchQueue(label: "voice.audio.buffer")
 
     init(settings: UserSettings, insertionService: TextInsertionService) {
         self.settings = settings
         self.insertionService = insertionService
-        bindCallbacks()
     }
 
-    func start(languages: [String]) async throws {
+    func startRecording() throws {
         guard !isRunning else { return }
-        try await gladiaClient.startSession(
-            apiKey: settings.apiKey,
-            languages: languages
-        )
+        bufferQueue.sync { audioBuffer = Data() }
+
         try audioCapture.startCapture { [weak self] data in
-            self?.gladiaClient.sendAudioChunk(data)
+            self?.bufferQueue.sync {
+                self?.audioBuffer.append(data)
+            }
         } levelHandler: { [weak self] level in
             self?.onAudioLevel?(level)
         }
         isRunning = true
     }
 
-    func stop() async {
+    /// Stops recording and discards all audio — no transcription is triggered.
+    func cancelRecording() {
         guard isRunning else { return }
         audioCapture.stopCapture()
-        await gladiaClient.stopSession()
+        isRunning = false
+        bufferQueue.sync { audioBuffer = Data() }
+    }
 
-        // Insert any remaining partial transcript that was never finalized.
-        await MainActor.run {
-            let remaining = lastPartialText
-            lastPartialText = ""
-            if !remaining.isEmpty {
-                #if DEBUG
-                print("[Dictation] inserting remaining partial: \"\(remaining)\"")
-                #endif
-                let success = insertionService.insertText(remaining)
+    func stopRecordingAndTranscribe() async {
+        guard isRunning else { return }
+        audioCapture.stopCapture()
+        isRunning = false
+
+        let recordedAudio = bufferQueue.sync { audioBuffer }
+        bufferQueue.sync { audioBuffer = Data() }
+
+        guard !recordedAudio.isEmpty else {
+            onError?("No audio recorded.")
+            return
+        }
+
+        // Build a WAV file from the raw PCM data
+        let wavData = buildWAVFile(from: recordedAudio)
+
+        onTranscribing?(true)
+
+        do {
+            let transcript = try await groqClient.transcribe(
+                apiKey: settings.apiKey,
+                audioData: wavData,
+                model: settings.transcriptionModel,
+                language: settings.language.code
+            )
+            onTranscribing?(false)
+
+            let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return }
+
+            await MainActor.run {
+                let success = insertionService.insertText(trimmed)
                 if !success {
                     onError?("Unable to insert text in current app.")
                 }
             }
+        } catch {
+            onTranscribing?(false)
+            onError?(error.localizedDescription)
         }
-
-        isRunning = false
     }
 
-    private func bindCallbacks() {
-        gladiaClient.onReconnectState = { [weak self] reconnecting in
-            self?.onReconnectState?(reconnecting)
-        }
-        gladiaClient.onError = { [weak self] message in
-            self?.onError?(message)
-        }
-        gladiaClient.onTranscript = { [weak self] text, isFinal in
-            // Dispatch to main thread — AX insertion, NSPasteboard, and CGEvent
-            // all require the main thread for reliable operation.
-            DispatchQueue.main.async {
-                guard let self else { return }
-                let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+    /// Creates a WAV file header + PCM data (16kHz, 16-bit, mono).
+    private func buildWAVFile(from pcmData: Data) -> Data {
+        let sampleRate: UInt32 = 16_000
+        let bitsPerSample: UInt16 = 16
+        let channels: UInt16 = 1
+        let byteRate = sampleRate * UInt32(channels) * UInt32(bitsPerSample) / 8
+        let blockAlign = channels * bitsPerSample / 8
+        let dataSize = UInt32(pcmData.count)
+        let chunkSize = 36 + dataSize
 
-                if isFinal {
-                    // Clear partial tracker — this utterance is now finalized.
-                    self.lastPartialText = ""
-                    guard !trimmed.isEmpty else { return }
-                    let success = self.insertionService.insertText(trimmed)
-                    if !success {
-                        self.onError?("Unable to insert text in current app.")
-                    }
-                } else {
-                    // Track the latest partial so we can insert it on stop
-                    // if is_final never arrives.
-                    self.lastPartialText = trimmed
-                }
-            }
-        }
+        var header = Data()
+        header.append(contentsOf: "RIFF".utf8)
+        header.append(contentsOf: withUnsafeBytes(of: chunkSize.littleEndian) { Array($0) })
+        header.append(contentsOf: "WAVE".utf8)
+        header.append(contentsOf: "fmt ".utf8)
+        header.append(contentsOf: withUnsafeBytes(of: UInt32(16).littleEndian) { Array($0) }) // subchunk1 size
+        header.append(contentsOf: withUnsafeBytes(of: UInt16(1).littleEndian) { Array($0) })  // PCM format
+        header.append(contentsOf: withUnsafeBytes(of: channels.littleEndian) { Array($0) })
+        header.append(contentsOf: withUnsafeBytes(of: sampleRate.littleEndian) { Array($0) })
+        header.append(contentsOf: withUnsafeBytes(of: byteRate.littleEndian) { Array($0) })
+        header.append(contentsOf: withUnsafeBytes(of: blockAlign.littleEndian) { Array($0) })
+        header.append(contentsOf: withUnsafeBytes(of: bitsPerSample.littleEndian) { Array($0) })
+        header.append(contentsOf: "data".utf8)
+        header.append(contentsOf: withUnsafeBytes(of: dataSize.littleEndian) { Array($0) })
+        header.append(pcmData)
+        return header
     }
 }
 
@@ -219,9 +247,6 @@ final class AudioCaptureService {
                 let rms = self.calculateRMS(from: buffer)
                 let normalizedLevel = min(max(rms * 6, 0.02), 1.0)
                 levelHandler(normalizedLevel)
-
-                // Skip sending silent chunks to save bandwidth.
-                guard rms > self.silenceThreshold else { return }
 
                 guard let convertedData = self.convertToPCM16(buffer: buffer, targetFormat: targetFormat) else { return }
                 chunkHandler(convertedData)
@@ -273,136 +298,56 @@ final class AudioCaptureService {
     }
 }
 
-// MARK: - StopWaiterTimeoutHandle
+// MARK: - GroqTranscriptionClient
 
-/// Sendable handle that runs resume work on a queue. Used to avoid capturing
-/// non-Sendable `GladiaRealtimeClient` in `DispatchQueue.global().asyncAfter`.
-private final class StopWaiterTimeoutHandle: @unchecked Sendable {
-    private let queue: DispatchQueue
-    private var work: (() -> Void)?
-
-    init(queue: DispatchQueue, work: @escaping () -> Void) {
-        self.queue = queue
-        self.work = work
-    }
-
-    func tryResume() {
-        queue.sync {
-            work?()
-            work = nil
-        }
-    }
-}
-
-// MARK: - GladiaRealtimeClient
-
-final class GladiaRealtimeClient {
-    var onTranscript: ((String, Bool) -> Void)?
-    var onError: ((String) -> Void)?
-    var onReconnectState: ((Bool) -> Void)?
-
-    private var webSocketTask: URLSessionWebSocketTask?
+final class GroqTranscriptionClient {
     private let session = URLSession(configuration: .default)
-    private var sessionURL: URL?
-    private var intentionalStop = false
-    private var reconnectAttempts = 0
-    private var usingBinaryFrames = true
+    private let endpoint = "https://api.groq.com/openai/v1/audio/transcriptions"
 
-    /// Continuation used to wait for final transcripts after sending stop_recording.
-    private var stopContinuation: CheckedContinuation<Void, Never>?
+    /// Sends audio to Groq's Whisper API and returns the transcript.
+    func transcribe(
+        apiKey: String,
+        audioData: Data,
+        model: TranscriptionModel,
+        language: String
+    ) async throws -> String {
+        guard let url = URL(string: endpoint) else { throw DictationError.invalidURL }
 
-    /// Serial queue protecting all mutable state.
-    private let stateQueue = DispatchQueue(label: "voice.gladia.state")
-
-    func startSession(apiKey: String, languages: [String]) async throws {
-        let (_, url) = try await initializeSession(apiKey: apiKey, languages: languages)
-        stateQueue.sync {
-            sessionURL = url
-            intentionalStop = false
-            reconnectAttempts = 0
-            usingBinaryFrames = true
-        }
-        connectWebSocket(url: url)
-    }
-
-    func stopSession() async {
-        stateQueue.sync { intentionalStop = true }
-        let stopPayload = URLSessionWebSocketTask.Message.string(#"{"type":"stop_recording"}"#)
-        try? await webSocketTask?.send(stopPayload)
-
-        // Wait up to 2 seconds for the server to deliver any final
-        // transcripts before tearing down the socket.
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            stateQueue.sync { stopContinuation = continuation }
-            // Timeout fallback — resume after 2s if no final transcript arrived.
-            let queue = stateQueue
-            // Work runs inside queue.sync, so we can access stopContinuation directly.
-            let resumeWork = { [weak self] in
-                guard let self else { return }
-                self.stopContinuation?.resume()
-                self.stopContinuation = nil
-            }
-            // Capture only Sendable values: queue and a closure that we invoke.
-            // The closure captures self but is only run on stateQueue.
-            let timeoutHandle = StopWaiterTimeoutHandle(queue: queue, work: resumeWork)
-            DispatchQueue.global().asyncAfter(deadline: .now() + 2) {
-                timeoutHandle.tryResume()
-            }
-        }
-
-        webSocketTask?.cancel(with: .normalClosure, reason: nil)
-        stateQueue.sync { webSocketTask = nil }
-    }
-
-    func sendAudioChunk(_ data: Data) {
-        let (task, useBinary) = stateQueue.sync { (webSocketTask, usingBinaryFrames) }
-        guard let task else { return }
-        if useBinary {
-            task.send(.data(data)) { [weak self] error in
-                if error != nil {
-                    self?.stateQueue.sync { self?.usingBinaryFrames = false }
-                    self?.sendAudioChunkAsJSON(data)
-                }
-            }
-        } else {
-            sendAudioChunkAsJSON(data)
-        }
-    }
-
-    /// Validates an API key by starting a session and immediately closing it.
-    static func validateAPIKey(_ apiKey: String) async -> Bool {
-        guard let url = URL(string: "https://api.gladia.io/v2/live") else { return false }
+        let boundary = UUID().uuidString
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.setValue(apiKey, forHTTPHeaderField: "x-gladia-key")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        let body: [String: Any] = [
-            "model": "solaria-1",
-            "encoding": "wav/pcm",
-            "sample_rate": 16_000,
-            "bit_depth": 16,
-            "channels": 1,
-            "language_config": ["languages": ["en"], "code_switching": false],
-            "messages_config": ["receive_partial_transcripts": false],
-        ]
-        guard let bodyData = try? JSONSerialization.data(withJSONObject: body) else { return false }
-        request.httpBody = bodyData
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        request.httpBody = buildMultipartBody(
+            boundary: boundary,
+            audioData: audioData,
+            model: model.rawValue,
+            language: language
+        )
+
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw DictationError.invalidResponse }
+        if http.statusCode == 401 || http.statusCode == 403 { throw DictationError.invalidAPIKey }
+        guard (200...299).contains(http.statusCode),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let text = json["text"] as? String
+        else {
+            let body = String(data: data, encoding: .utf8) ?? ""
+            throw DictationError.serverError(body.isEmpty ? "Transcription failed." : body)
+        }
+        return text
+    }
+
+    /// Validates a Groq API key by hitting the models list endpoint.
+    static func validateAPIKey(_ apiKey: String) async -> Bool {
+        guard let url = URL(string: "https://api.groq.com/openai/v1/models") else { return false }
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         do {
-            let (data, response) = try await URLSession.shared.data(for: request)
+            let (_, response) = try await URLSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse else { return false }
-            if http.statusCode == 401 || http.statusCode == 403 { return false }
-            guard (200...299).contains(http.statusCode),
-                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let wsURLString = json["url"] as? String,
-                  let wsURL = URL(string: wsURLString)
-            else { return false }
-            // Immediately tear down the validation session.
-            let ws = URLSession.shared.webSocketTask(with: wsURL)
-            ws.resume()
-            let stop = URLSessionWebSocketTask.Message.string(#"{"type":"stop_recording"}"#)
-            try? await ws.send(stop)
-            ws.cancel(with: .normalClosure, reason: nil)
-            return true
+            return http.statusCode != 401 && http.statusCode != 403
         } catch {
             return false
         }
@@ -410,172 +355,33 @@ final class GladiaRealtimeClient {
 
     // MARK: - Private
 
-    private func sendAudioChunkAsJSON(_ data: Data) {
-        let task = stateQueue.sync { webSocketTask }
-        guard let task else { return }
-        let base64 = data.base64EncodedString()
-        let payload = #"{"type":"audio_chunk","data":{"chunk":"\#(base64)"}}"#
-        task.send(.string(payload)) { [weak self] error in
-            if let error {
-                self?.onError?("Audio send failed: \(error.localizedDescription)")
-            }
-        }
-    }
+    private func buildMultipartBody(
+        boundary: String,
+        audioData: Data,
+        model: String,
+        language: String
+    ) -> Data {
+        var body = Data()
 
-    private func connectWebSocket(url: URL) {
-        stateQueue.sync {
-            webSocketTask?.cancel(with: .normalClosure, reason: nil)
-            let task = session.webSocketTask(with: url)
-            webSocketTask = task
-            task.resume()
+        func field(_ name: String, _ value: String) {
+            body.append(contentsOf: "--\(boundary)\r\n".utf8)
+            body.append(contentsOf: "Content-Disposition: form-data; name=\"\(name)\"\r\n\r\n".utf8)
+            body.append(contentsOf: "\(value)\r\n".utf8)
         }
-        receiveLoop()
-    }
 
-    private func receiveLoop() {
-        let task = stateQueue.sync { webSocketTask }
-        guard let task else { return }
-        task.receive { [weak self] result in
-            guard let self else { return }
-            switch result {
-            case .success(let message):
-                self.handleMessage(message)
-                self.receiveLoop()
-            case .failure(let error):
-                self.handleDisconnect(error: error)
-            }
-        }
-    }
+        // Audio file
+        body.append(contentsOf: "--\(boundary)\r\n".utf8)
+        body.append(contentsOf: "Content-Disposition: form-data; name=\"file\"; filename=\"recording.wav\"\r\n".utf8)
+        body.append(contentsOf: "Content-Type: audio/wav\r\n\r\n".utf8)
+        body.append(audioData)
+        body.append(contentsOf: "\r\n".utf8)
 
-    private func handleMessage(_ message: URLSessionWebSocketTask.Message) {
-        let text: String?
-        switch message {
-        case .string(let value): text = value
-        case .data(let data): text = String(data: data, encoding: .utf8)
-        @unknown default: text = nil
-        }
-        guard let text,
-              let data = text.data(using: .utf8),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let type = json["type"] as? String
-        else { return }
+        field("model", model)
+        field("language", language)
+        field("response_format", "json")
 
-        if type == "transcript",
-           let transcriptData = json["data"] as? [String: Any]
-        {
-            // Default to true — when receive_partial_transcripts is false,
-            // Gladia may omit is_final since all messages are implicitly final.
-            let isFinal = transcriptData["is_final"] as? Bool ?? true
-            let utterance = transcriptData["utterance"] as? [String: Any]
-            let transcriptText = (utterance?["text"] as? String) ?? ""
-            #if DEBUG
-            print("[Gladia] transcript is_final=\(isFinal) text=\"\(transcriptText)\"")
-            #endif
-            onTranscript?(transcriptText, isFinal)
-
-            // If this was the final transcript, unblock stopSession's wait.
-            if isFinal {
-                resolveStopWaiter()
-            }
-        } else if type == "error" {
-            let message = (json["message"] as? String) ?? "Gladia returned an error."
-            onError?(message)
-        } else {
-            #if DEBUG
-            print("[Gladia] message type=\"\(type)\" data=\(json)")
-            #endif
-        }
-    }
-
-    private func handleDisconnect(error: Error?) {
-        let stopped = stateQueue.sync { intentionalStop }
-        if stopped {
-            resolveStopWaiter()
-            return
-        }
-        Task { await reconnect() }
-    }
-
-    /// Resumes the stop-wait continuation if one is pending.
-    private func resolveStopWaiter() {
-        stateQueue.sync {
-            stopContinuation?.resume()
-            stopContinuation = nil
-        }
-    }
-
-    private func reconnect() async {
-        let url = stateQueue.sync { sessionURL }
-        guard let url else { return }
-        onReconnectState?(true)
-        while true {
-            let (attempts, stopped) = stateQueue.sync { (reconnectAttempts, intentionalStop) }
-            guard attempts < 3 && !stopped else { break }
-            stateQueue.sync { reconnectAttempts += 1 }
-            connectWebSocket(url: url)
-            // Give the WebSocket time to handshake before probing.
-            let currentAttempt = stateQueue.sync { reconnectAttempts }
-            try? await Task.sleep(nanoseconds: UInt64(currentAttempt) * 1_000_000_000)
-            if await pingSocket() {
-                stateQueue.sync { reconnectAttempts = 0 }
-                onReconnectState?(false)
-                return
-            }
-        }
-        onReconnectState?(false)
-        onError?("Connection lost. Please start dictation again.")
-    }
-
-    private func pingSocket() async -> Bool {
-        let task = stateQueue.sync { webSocketTask }
-        guard let task else { return false }
-        return await withCheckedContinuation { continuation in
-            task.sendPing { error in
-                continuation.resume(returning: error == nil)
-            }
-        }
-    }
-
-    private func initializeSession(apiKey: String, languages: [String]) async throws -> (String, URL) {
-        guard let url = URL(string: "https://api.gladia.io/v2/live") else {
-            throw DictationError.invalidURL
-        }
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue(apiKey, forHTTPHeaderField: "x-gladia-key")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        let body: [String: Any] = [
-            "model": "solaria-1",
-            "encoding": "wav/pcm",
-            "sample_rate": 16_000,
-            "bit_depth": 16,
-            "channels": 1,
-            "language_config": [
-                "languages": languages,
-                "code_switching": languages.count > 1,
-            ],
-            "messages_config": [
-                "receive_partial_transcripts": true,
-                "receive_final_transcripts": true,
-            ],
-        ]
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
-        let (data, response) = try await session.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw DictationError.invalidResponse
-        }
-        if httpResponse.statusCode == 401 || httpResponse.statusCode == 403 {
-            throw DictationError.invalidAPIKey
-        }
-        guard (200...299).contains(httpResponse.statusCode),
-              let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let id = json["id"] as? String,
-              let urlString = json["url"] as? String,
-              let wsURL = URL(string: urlString)
-        else {
-            throw DictationError.sessionInitializationFailed
-        }
-        return (id, wsURL)
+        body.append(contentsOf: "--\(boundary)--\r\n".utf8)
+        return body
     }
 }
 
@@ -583,20 +389,41 @@ final class GladiaRealtimeClient {
 
 final class TextInsertionService {
     func insertText(_ text: String) -> Bool {
-        // For Notes and Pages, prefer clipboard paste immediately as it's more reliable
-        if let appName = NSWorkspace.shared.frontmostApplication?.localizedName,
-           (appName.contains("Notes") || appName.contains("Pages")) {
+        // For rich-text apps and terminal emulators, prefer clipboard paste
+        let app = NSWorkspace.shared.frontmostApplication
+        let appName = app?.localizedName ?? ""
+        let bundleID = app?.bundleIdentifier ?? ""
+        if appName.contains("Notes") || appName.contains("Pages") ||
+           bundleID == "com.apple.Terminal" ||
+           bundleID.contains("iTerm") ||
+           bundleID.contains("alacritty") ||
+           bundleID.contains("warp") ||
+           bundleID.contains("kitty") ||
+           bundleID.contains("wezterm") ||
+           appName.contains("Console") ||
+           bundleID.contains("Safari") ||
+           bundleID.contains("chrome") || bundleID.contains("Chrome") ||
+           bundleID.contains("firefox") || bundleID.contains("Firefox") ||
+           bundleID.contains("brave") || bundleID.contains("Brave") ||
+           bundleID.contains("arc") ||
+           bundleID.contains("opera") || bundleID.contains("Opera") ||
+           bundleID.contains("edge") || bundleID.contains("Edge") ||
+           bundleID.contains("vivaldi") || bundleID.contains("Vivaldi") ||
+           bundleID.contains("browser") || bundleID.contains("Browser") {
             return pasteWithClipboardFallback(text)
         }
-        
+
+        // Try Accessibility API first (works in most text fields)
         if insertWithAccessibility(text) {
             return true
         }
+
+        // Fall back to clipboard paste as universal method
         return pasteWithClipboardFallback(text)
     }
 
-    /// Uses Accessibility API with hierarchy traversal for Notes, Pages, and other
-    /// apps that expose text editing via child elements rather than the focused element.
+    // MARK: - Accessibility API
+
     private func insertWithAccessibility(_ text: String) -> Bool {
         let systemWide = AXUIElementCreateSystemWide()
         var focusedRef: CFTypeRef?
@@ -608,22 +435,9 @@ final class TextInsertionService {
         guard result == .success, let focused = focusedRef else { return false }
         let element = focused as! AXUIElement
 
-        // Try focused element first (works for most apps like Chrome, Word, Obsidian)
-        if trySetText(on: element, text: text) {
-            return true
-        }
-
-        // Notes, Pages, and some Apple apps focus a container; the actual text
-        // field is often a descendant. Search children recursively.
-        if trySetTextInDescendants(of: element, text: text) {
-            return true
-        }
-
-        // Some single-line fields use kAXValueAttribute instead of kAXSelectedText
-        if trySetValue(on: element, text: text) {
-            return true
-        }
-
+        if trySetText(on: element, text: text) { return true }
+        if trySetTextInDescendants(of: element, text: text) { return true }
+        if trySetValue(on: element, text: text) { return true }
         return false
     }
 
@@ -632,27 +446,65 @@ final class TextInsertionService {
     }
 
     private func trySetValue(on element: AXUIElement, text: String) -> Bool {
-        // kAXValueAttribute is used by NSTextField and some single-line editors
         AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, text as CFTypeRef) == .success
     }
 
     private func trySetTextInDescendants(of element: AXUIElement, text: String, depth: Int = 0) -> Bool {
-        guard depth < 5 else { return false } // Limit recursion
+        guard depth < 5 else { return false }
         var childrenRef: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &childrenRef) == .success,
               let children = childrenRef,
               let array = (children as? [AXUIElement])
         else { return false }
         for child in array {
-            if trySetText(on: child, text: text) || trySetValue(on: child, text: text) {
-                return true
-            }
-            if trySetTextInDescendants(of: child, text: text, depth: depth + 1) {
-                return true
-            }
+            if trySetText(on: child, text: text) || trySetValue(on: child, text: text) { return true }
+            if trySetTextInDescendants(of: child, text: text, depth: depth + 1) { return true }
         }
         return false
     }
+
+    // MARK: - Simulated Keystrokes (universal fallback)
+
+    /// Types text by simulating keyboard events with CGEventKeyboardSetUnicodeString.
+    /// Works in Terminal, browser address bars, and other apps where clipboard paste fails.
+    private func insertWithKeystrokes(_ text: String) -> Bool {
+        let utf16 = Array(text.utf16)
+        guard !utf16.isEmpty else { return false }
+
+        let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier
+
+        // CGEventKeyboardSetUnicodeString can handle up to ~20 UTF-16 units per event reliably.
+        // We chunk the text to avoid dropped characters.
+        let chunkSize = 16
+        for start in stride(from: 0, to: utf16.count, by: chunkSize) {
+            let end = min(start + chunkSize, utf16.count)
+            var chunk = Array(utf16[start..<end])
+            let length = chunk.count
+
+            guard let keyDown = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true),
+                  let keyUp   = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: false)
+            else { return false }
+
+            keyDown.keyboardSetUnicodeString(stringLength: length, unicodeString: &chunk)
+            keyUp.keyboardSetUnicodeString(stringLength: 0, unicodeString: &chunk)
+
+            if let pid = pid {
+                keyDown.postToPid(pid)
+                keyUp.postToPid(pid)
+            } else {
+                keyDown.post(tap: .cghidEventTap)
+                keyUp.post(tap: .cghidEventTap)
+            }
+
+            // Small delay between chunks to let the target app process input
+            if end < utf16.count {
+                Thread.sleep(forTimeInterval: 0.008)
+            }
+        }
+        return true
+    }
+
+    // MARK: - Clipboard Paste (for rich-text apps)
 
     private func pasteWithClipboardFallback(_ text: String) -> Bool {
         guard let savedClipboard = ClipboardSnapshot.capture() else { return false }
@@ -660,10 +512,8 @@ final class TextInsertionService {
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
 
-        // Small delay to ensure clipboard is ready
         Thread.sleep(forTimeInterval: 0.05)
 
-        // Use kVK_ANSI_V for layout-independent V key; set timestamps for macOS 15+ compatibility
         let keyCode = CGKeyCode(kVK_ANSI_V)
         let timestamp = UInt64(clock_gettime_nsec_np(CLOCK_UPTIME_RAW))
 
@@ -675,10 +525,8 @@ final class TextInsertionService {
         cmdDown.timestamp = CGEventTimestamp(timestamp)
         cmdUp.timestamp = CGEventTimestamp(timestamp + 1)
 
-        // Post to frontmost app's PID for better delivery in Notes, Pages, etc.
         if let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier {
             cmdDown.postToPid(pid)
-            // Small delay between keydown and keyup
             Thread.sleep(forTimeInterval: 0.02)
             cmdUp.postToPid(pid)
         } else {
@@ -687,7 +535,6 @@ final class TextInsertionService {
             cmdUp.post(tap: .cghidEventTap)
         }
 
-        // Longer delay for clipboard restoration to ensure paste completes
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             savedClipboard.restore()
         }

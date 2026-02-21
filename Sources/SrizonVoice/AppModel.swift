@@ -5,9 +5,9 @@ import SwiftUI
 @MainActor
 final class AppModel: ObservableObject {
     @Published var isDictating = false
+    @Published var isTranscribing = false
     @Published var audioLevel: Float = 0
     @Published var errorMessage: String?
-    @Published var isReconnecting = false
     @Published var isValidatingKey = false
 
     let settings = UserSettings()
@@ -37,14 +37,15 @@ final class AppModel: ObservableObject {
 
     func registerHotKey() {
         hotKeyMonitor.unregister()
+        guard permissionManager.inputMonitoringPermissionGranted else {
+            // Don't attempt to create event tap without Input Monitoring permission —
+            // CGEvent.tapCreate will silently return nil.
+            return
+        }
         do {
-            try hotKeyMonitor.register(hotKey: settings.hotKey) { [weak self] in
-                Task { @MainActor in
-                    self?.toggleDictation()
-                }
-            }
+            try hotKeyMonitor.register(hotKey: settings.hotKey)
         } catch {
-            showError("Failed to register global shortcut.")
+            showError("Failed to register global shortcut. Check Input Monitoring permission in System Settings > Privacy & Security.")
         }
     }
 
@@ -71,53 +72,53 @@ final class AppModel: ObservableObject {
     }
 
     func switchLanguage(_ language: LanguageOption) {
-        let wasDictating = isDictating
-        if wasDictating {
-            stopDictation()
-        }
-        // Notify SwiftUI that the model will change so the menu updates
         objectWillChange.send()
         settings.language = language
         saveSettings()
-        if wasDictating {
-            startDictation()
-        }
     }
     
     func switchSecondaryLanguage(_ language: LanguageOption?) {
-        let wasDictating = isDictating
-        if wasDictating {
-            stopDictation()
-        }
         objectWillChange.send()
         settings.secondaryLanguage = language
         saveSettings()
-        if wasDictating {
-            startDictation()
-        }
-    }
-
-    func toggleDictation() {
-        isDictating ? stopDictation() : startDictation()
     }
 
     @Published var hasMicrophonePermission = false
     @Published var hasAccessibilityPermission = false
+    @Published var hasInputMonitoringPermission = false
 
     func requestPermissions() {
         Task {
+            // Step 1: Microphone — system shows its own dialog
             _ = await permissionManager.requestMicrophonePermission()
-            _ = permissionManager.requestAccessibilityPermission(prompt: true)
             refreshPermissions()
+
+            // Step 2: Accessibility — wait until granted before moving on
+            if !permissionManager.accessibilityPermissionGranted {
+                _ = permissionManager.requestAccessibilityPermission(prompt: true)
+                // Poll until the user grants accessibility
+                while !permissionManager.accessibilityPermissionGranted {
+                    try? await Task.sleep(nanoseconds: 500_000_000)
+                    guard !Task.isCancelled else { return }
+                }
+                refreshPermissions()
+            }
+
+            // Step 3: Input Monitoring — only prompt after accessibility is granted
+            if !permissionManager.inputMonitoringPermissionGranted {
+                permissionManager.requestInputMonitoringPermission()
+                refreshPermissions()
+            }
         }
     }
 
-    /// Validates the key against the Gladia API, then saves all settings on success.
+    /// Validates the key against the Groq API, then saves all settings on success.
     func validateAndSaveAPIKey(
         _ key: String,
         hotKey: HotKey,
         language: LanguageOption? = nil,
         secondaryLanguage: LanguageOption? = nil,
+        transcriptionModel: TranscriptionModel = .whisperTurbo,
         completion: @escaping (Bool) -> Void
     ) {
         let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -128,11 +129,12 @@ final class AppModel: ObservableObject {
         }
         isValidatingKey = true
         Task {
-            let valid = await GladiaRealtimeClient.validateAPIKey(trimmed)
+            let valid = await GroqTranscriptionClient.validateAPIKey(trimmed)
             isValidatingKey = false
             if valid {
                 settings.apiKey = trimmed
                 settings.hotKey = hotKey
+                settings.transcriptionModel = transcriptionModel
                 if let language { settings.language = language }
                 settings.secondaryLanguage = secondaryLanguage
                 saveSettings()
@@ -149,7 +151,7 @@ final class AppModel: ObservableObject {
 
     private func startDictation() {
         if settings.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            showError("Add your Gladia API key in Settings.")
+            showError("Add your Groq API key in Settings.")
             return
         }
         refreshPermissions()
@@ -166,8 +168,7 @@ final class AppModel: ObservableObject {
                 return
             }
             do {
-                let languages = [settings.language.code] + (settings.secondaryLanguage.map { [$0.code] } ?? [])
-                try await dictationCoordinator.start(languages: languages)
+                try dictationCoordinator.startRecording()
                 isDictating = true
                 recordingIslandController.show()
                 NSSound(named: "Tink")?.play()
@@ -180,11 +181,16 @@ final class AppModel: ObservableObject {
     }
 
     private func stopDictation() {
+        guard isDictating else { return }
+        isDictating = false
+        isTranscribing = true
+        recordingIslandController.showTranscribing()
+        NSSound(named: "Pop")?.play()
+
         Task {
-            await dictationCoordinator.stop()
-            isDictating = false
+            await dictationCoordinator.stopRecordingAndTranscribe()
+            isTranscribing = false
             recordingIslandController.hide()
-            NSSound(named: "Pop")?.play()
         }
     }
 
@@ -206,30 +212,46 @@ final class AppModel: ObservableObject {
                 self?.recordingIslandController.updateLevel(level)
             }
         }
-        dictationCoordinator.onReconnectState = { [weak self] reconnecting in
+        dictationCoordinator.onTranscribing = { [weak self] transcribing in
             Task { @MainActor in
-                self?.isReconnecting = reconnecting
+                self?.isTranscribing = transcribing
+                if transcribing {
+                    self?.recordingIslandController.showTranscribing()
+                }
             }
         }
         dictationCoordinator.onError = { [weak self] message in
             Task { @MainActor in
                 self?.showError(message)
                 self?.isDictating = false
+                self?.isTranscribing = false
                 self?.recordingIslandController.hide()
+            }
+        }
+
+        // Hotkey press-and-hold: press starts, release stops
+        hotKeyMonitor.onKeyDown = { [weak self] in
+            Task { @MainActor in
+                guard let self, !self.isDictating, !self.isTranscribing else { return }
+                self.startDictation()
+            }
+        }
+        hotKeyMonitor.onKeyUp = { [weak self] in
+            Task { @MainActor in
+                self?.stopDictation()
             }
         }
     }
 
     private func bindStopControls() {
-        recordingIslandController.onStopTapped = { [weak self] in
-            Task { @MainActor in
-                self?.stopDictation()
-            }
-        }
+        // Escape cancels recording without transcribing
         escapeKeyMonitor.onEscapePressed = { [weak self] in
             Task { @MainActor in
                 guard let self, self.isDictating else { return }
-                self.stopDictation()
+                self.dictationCoordinator.cancelRecording()
+                self.isDictating = false
+                self.recordingIslandController.hide()
+                NSSound(named: "Pop")?.play()
             }
         }
         escapeKeyMonitor.start()
@@ -238,6 +260,7 @@ final class AppModel: ObservableObject {
     private func refreshPermissions() {
         hasMicrophonePermission = permissionManager.microphonePermissionGranted
         hasAccessibilityPermission = permissionManager.accessibilityPermissionGranted
+        hasInputMonitoringPermission = permissionManager.inputMonitoringPermissionGranted
     }
 
     private func startPermissionPolling() {
@@ -246,8 +269,17 @@ final class AppModel: ObservableObject {
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
                 guard let self, !Task.isCancelled else { return }
+                let hadAccessibility = self.hasAccessibilityPermission
+                let hadInputMonitoring = self.hasInputMonitoringPermission
                 self.refreshPermissions()
-                if self.hasMicrophonePermission && self.hasAccessibilityPermission {
+                // Re-register hotkeys when Accessibility or Input Monitoring is newly granted.
+                // CGEvent taps created before permission was granted silently fail,
+                // so we must recreate them once the permission is available.
+                if (!hadAccessibility && self.hasAccessibilityPermission) ||
+                   (!hadInputMonitoring && self.hasInputMonitoringPermission) {
+                    self.registerHotKey()
+                }
+                if self.hasMicrophonePermission && self.hasAccessibilityPermission && self.hasInputMonitoringPermission {
                     return
                 }
             }
