@@ -245,7 +245,7 @@ final class AudioCaptureService {
             guard let self else { return }
             self.queue.async {
                 let rms = self.calculateRMS(from: buffer)
-                let normalizedLevel = min(max(rms * 6, 0.02), 1.0)
+                let normalizedLevel = min(max(rms * 25, 0.05), 1.0)
                 levelHandler(normalizedLevel)
 
                 guard let convertedData = self.convertToPCM16(buffer: buffer, targetFormat: targetFormat) else { return }

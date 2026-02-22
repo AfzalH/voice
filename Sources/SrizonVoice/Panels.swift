@@ -136,9 +136,9 @@ final class RecordingIslandView: NSView {
         guard !isTranscribing else { return }
         barValues.removeFirst()
         
-        let baseLevel = audioLevel * 0.8
-        let randomVariation = Float.random(in: -0.08...0.08)
-        let newValue = min(max(baseLevel + randomVariation, 0.08), 1.0)
+        let baseLevel = audioLevel
+        let randomVariation = Float.random(in: -0.12...0.12)
+        let newValue = min(max(baseLevel + randomVariation, 0.10), 1.0)
         barValues.append(newValue)
         
         needsDisplay = true
