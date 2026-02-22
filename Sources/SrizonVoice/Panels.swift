@@ -244,7 +244,7 @@ final class RecordingIslandView: NSView {
 
 // MARK: - SettingsWindowManager
 
-final class SettingsWindowManager {
+final class SettingsWindowManager: NSObject, NSWindowDelegate {
     private var window: NSWindow?
     private weak var model: AppModel?
 
@@ -255,6 +255,10 @@ final class SettingsWindowManager {
     func show() {
         guard let model else { return }
         window?.close()
+
+        // Show dock icon while settings is open
+        NSApp.setActivationPolicy(.regular)
+
         let root = SettingsView(model: model)
         let hosting = NSHostingController(rootView: root)
         let newWindow = NSWindow(contentViewController: hosting)
@@ -263,6 +267,7 @@ final class SettingsWindowManager {
         newWindow.setContentSize(NSSize(width: 600, height: 480))
         newWindow.isReleasedWhenClosed = false
         newWindow.level = .normal
+        newWindow.delegate = self
         newWindow.center()
         newWindow.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -270,7 +275,26 @@ final class SettingsWindowManager {
     }
 
     func hide() {
-        window?.close()
+        guard let window else { return }
+        // Detach the SwiftUI hosting controller synchronously so that
+        // any pending @Published updates (from saveSettings, errorMessage,
+        // isValidatingKey) never reach a torn-down view hierarchy.
+        // The actual window close happens on the next run-loop iteration
+        // after the view tree is already gone.
+        window.contentViewController = nil
+        DispatchQueue.main.async {
+            window.close()
+        }
+    }
+
+    // MARK: - NSWindowDelegate
+
+    func windowWillClose(_ notification: Notification) {
         window = nil
+        model?.onSettingsWindowClosed()
+        // Switch back to menu-bar-only mode
+        DispatchQueue.main.async {
+            NSApp.setActivationPolicy(.accessory)
+        }
     }
 }

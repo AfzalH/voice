@@ -68,6 +68,10 @@ final class AppModel: ObservableObject {
 
     func dismissSettingsWindow() {
         settingsWindowManager.hide()
+    }
+
+    /// Called by SettingsWindowManager when the window closes (via Save or close button).
+    func onSettingsWindowClosed() {
         stopPermissionPolling()
     }
 

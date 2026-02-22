@@ -30,13 +30,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - NSApplicationDelegate
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // Hide the Dock icon — this is a menu-bar-only app.
-        NSApp.setActivationPolicy(.accessory)
-
         appModel = AppModel()
         setupAppIcon()
         setupStatusItem()
-        appModel.presentSettingsIfNeeded()
+
+        if appModel.settings.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            // First launch / no API key — show as a regular app with dock icon
+            NSApp.setActivationPolicy(.regular)
+            appModel.presentSettingsWindow()
+        } else {
+            // Already configured — run as menu-bar-only
+            NSApp.setActivationPolicy(.accessory)
+        }
+    }
+
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        false
     }
 
     func applicationShouldHandleReopen(
