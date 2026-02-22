@@ -4,6 +4,10 @@ Menu bar dictation app for macOS (Ventura+) using Groq Whisper (BYOK).
 
 Hold a hotkey while speaking, release to transcribe. Text is inserted wherever your cursor is.
 
+## Download
+
+Download the latest DMG from [GitHub Releases](https://github.com/AfzalH/voice/releases/latest).
+
 ## Setup
 
 1. Get a free API key from [console.groq.com](https://console.groq.com/keys)
@@ -40,14 +44,14 @@ This produces `dist/SrizonVoice.app`.
 
 This produces:
 
-- `dist/SrizonVoice-0.1.0.dmg` — Installer disk image
-- `dist/SrizonVoice-0.1.0.sha256` — Checksum for verification
+- `dist/SrizonVoice-1.0.0.dmg` — Installer disk image
+- `dist/SrizonVoice-1.0.0.sha256` — Checksum for verification
 
 ## Install
 
 From DMG (recommended):
 
-1. Open `SrizonVoice-0.1.0.dmg`
+1. Open `SrizonVoice-1.0.0.dmg`
 2. Drag `SrizonVoice.app` to the `Applications` folder
 3. Launch from Applications or Spotlight
 
