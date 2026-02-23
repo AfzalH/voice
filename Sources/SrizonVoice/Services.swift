@@ -409,7 +409,13 @@ final class TextInsertionService {
            bundleID.contains("opera") || bundleID.contains("Opera") ||
            bundleID.contains("edge") || bundleID.contains("Edge") ||
            bundleID.contains("vivaldi") || bundleID.contains("Vivaldi") ||
-           bundleID.contains("browser") || bundleID.contains("Browser") {
+           bundleID.contains("browser") || bundleID.contains("Browser") ||
+           bundleID.contains("slack") || bundleID.contains("Slack") ||
+           bundleID.contains("discord") || bundleID.contains("Discord") ||
+           bundleID.contains("notion") || bundleID.contains("Notion") ||
+           bundleID.contains("linear") ||
+           bundleID.contains("figma") ||
+           bundleID.contains("electron") || bundleID.contains("Electron") {
             return pasteWithClipboardFallback(text)
         }
 
@@ -525,15 +531,11 @@ final class TextInsertionService {
         cmdDown.timestamp = CGEventTimestamp(timestamp)
         cmdUp.timestamp = CGEventTimestamp(timestamp + 1)
 
-        if let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier {
-            cmdDown.postToPid(pid)
-            Thread.sleep(forTimeInterval: 0.02)
-            cmdUp.postToPid(pid)
-        } else {
-            cmdDown.post(tap: .cghidEventTap)
-            Thread.sleep(forTimeInterval: 0.02)
-            cmdUp.post(tap: .cghidEventTap)
-        }
+        // Post to cghidEventTap (global) — more reliable for Electron apps (Slack, Discord, etc.)
+        // which may ignore pid-targeted events.
+        cmdDown.post(tap: .cghidEventTap)
+        Thread.sleep(forTimeInterval: 0.02)
+        cmdUp.post(tap: .cghidEventTap)
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             savedClipboard.restore()
