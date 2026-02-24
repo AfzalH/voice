@@ -8,6 +8,17 @@ Hold a hotkey while speaking, release to transcribe. Text is inserted wherever y
 
 Download the latest DMG from [GitHub Releases](https://github.com/AfzalH/voice/releases/latest).
 
+> [!WARNING]
+> **"Apple could not verify" Warning**
+>
+> Since SrizonVoice is not notarized by Apple yet, macOS Gatekeeper may block the app on first launch. To fix this, open Terminal and run:
+>
+> ```sh
+> xattr -cr /Applications/SrizonVoice.app
+> ```
+>
+> This removes the quarantine flag that macOS adds to downloaded apps. You only need to do this once.
+
 ## Setup
 
 1. Get a free API key from [console.groq.com](https://console.groq.com/keys)
