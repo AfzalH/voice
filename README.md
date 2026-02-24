@@ -44,14 +44,14 @@ This produces `dist/SrizonVoice.app`.
 
 This produces:
 
-- `dist/SrizonVoice-1.0.0.dmg` — Installer disk image
-- `dist/SrizonVoice-1.0.0.sha256` — Checksum for verification
+- `dist/SrizonVoice-2.0.0.dmg` — Installer disk image
+- `dist/SrizonVoice-2.0.0.sha256` — Checksum for verification
 
 ## Install
 
 From DMG (recommended):
 
-1. Open `SrizonVoice-1.0.0.dmg`
+1. Open `SrizonVoice-2.0.0.dmg`
 2. Drag `SrizonVoice.app` to the `Applications` folder
 3. Launch from Applications or Spotlight
 

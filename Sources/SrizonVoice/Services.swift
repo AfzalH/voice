@@ -111,11 +111,15 @@ final class DictationCoordinator {
     private let insertionService: TextInsertionService
     private let audioCapture = AudioCaptureService()
     private let groqClient = GroqTranscriptionClient()
+    private let llmClient = LLMClient()
     private var isRunning = false
 
     /// Accumulated audio data from the recording session.
     private var audioBuffer = Data()
     private let bufferQueue = DispatchQueue(label: "voice.audio.buffer")
+
+    /// The app that was frontmost when recording started (i.e. the user's target app).
+    private var targetAppName: String = "Unknown App"
 
     init(settings: UserSettings, insertionService: TextInsertionService) {
         self.settings = settings
@@ -125,6 +129,7 @@ final class DictationCoordinator {
     func startRecording() throws {
         guard !isRunning else { return }
         bufferQueue.sync { audioBuffer = Data() }
+        targetAppName = NSWorkspace.shared.frontmostApplication?.localizedName ?? "Unknown App"
 
         try audioCapture.startCapture { [weak self] data in
             self?.bufferQueue.sync {
@@ -152,6 +157,10 @@ final class DictationCoordinator {
         let recordedAudio = bufferQueue.sync { audioBuffer }
         bufferQueue.sync { audioBuffer = Data() }
 
+        // Get the target app info before transcription (while recording is still fresh)
+        let targetApp = NSWorkspace.shared.frontmostApplication
+        let targetAppName = targetApp?.localizedName ?? "Unknown App"
+
         guard !recordedAudio.isEmpty else {
             onError?("No audio recorded.")
             return
@@ -163,12 +172,25 @@ final class DictationCoordinator {
         onTranscribing?(true)
 
         do {
-            let transcript = try await groqClient.transcribe(
+            var transcript = try await groqClient.transcribe(
                 apiKey: settings.apiKey,
                 audioData: wavData,
                 model: settings.transcriptionModel,
                 language: settings.language.code
             )
+
+            // Apply LLM post-processing if enabled
+            if settings.postProcessingEnabled {
+                let processedText = try await llmClient.postProcess(
+                    apiKey: settings.apiKey,
+                    transcript: transcript,
+                    model: settings.postProcessingModel,
+                    systemPrompt: settings.postProcessingSystemPrompt,
+                    targetAppName: targetAppName
+                )
+                transcript = processedText
+            }
+
             onTranscribing?(false)
 
             let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -382,6 +404,61 @@ final class GroqTranscriptionClient {
 
         body.append(contentsOf: "--\(boundary)--\r\n".utf8)
         return body
+    }
+}
+
+// MARK: - LLMClient
+
+final class LLMClient {
+    private let session = URLSession(configuration: .default)
+    private let endpoint = "https://api.groq.com/openai/v1/chat/completions"
+
+    /// Sends the transcript to Groq's LLM API for post-processing.
+    func postProcess(
+        apiKey: String,
+        transcript: String,
+        model: PostProcessingModel,
+        systemPrompt: String,
+        targetAppName: String
+    ) async throws -> String {
+        guard let url = URL(string: endpoint) else { throw DictationError.invalidURL }
+
+        // Append target app context to the system prompt
+        let appContext = " Note: The dictation was triggered in the context of: \(targetAppName)."
+        let enhancedPrompt = systemPrompt + appContext
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let messages: [[String: Any]] = [
+            ["role": "system", "content": enhancedPrompt],
+            ["role": "user", "content": transcript]
+        ]
+
+        let body: [String: Any] = [
+            "model": model.rawValue,
+            "messages": messages,
+            "temperature": 0.3
+        ]
+
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw DictationError.invalidResponse }
+        if http.statusCode == 401 || http.statusCode == 403 { throw DictationError.invalidAPIKey }
+        guard (200...299).contains(http.statusCode),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let choices = json["choices"] as? [[String: Any]],
+              let firstChoice = choices.first,
+              let message = firstChoice["message"] as? [String: Any],
+              let content = message["content"] as? String
+        else {
+            let body = String(data: data, encoding: .utf8) ?? ""
+            throw DictationError.serverError(body.isEmpty ? "Post-processing failed." : body)
+        }
+        return content
     }
 }
 

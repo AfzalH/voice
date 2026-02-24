@@ -73,19 +73,95 @@ struct MenuBarContentView: View {
     }
 }
 
+// MARK: - SettingsTab
+
+private enum SettingsTab: String, CaseIterable, Identifiable {
+    case general
+    case transcription
+    case postProcessing
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .general:        return "General"
+        case .transcription:  return "Transcription"
+        case .postProcessing: return "Post-Processing"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .general:        return "gearshape"
+        case .transcription:  return "waveform"
+        case .postProcessing: return "sparkles"
+        }
+    }
+}
+
+// MARK: - SettingsCard
+
+private struct SettingsCard<Content: View>: View {
+    let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    var body: some View {
+        content
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color(nsColor: .controlBackgroundColor))
+            )
+    }
+}
+
+// MARK: - SettingsCardHeader
+
+private struct SettingsCardHeader: View {
+    let title: String
+    var subtitle: String? = nil
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+                .font(.headline)
+            if let subtitle {
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
 // MARK: - SettingsView
 
 struct SettingsView: View {
     @ObservedObject var model: AppModel
+    @State private var selectedTab: SettingsTab = .general
     @State private var apiKey: String = ""
     @State private var hotKey = HotKey.defaultValue
     @State private var language = LanguageOption.english
     @State private var secondaryLanguage: LanguageOption?
     @State private var transcriptionModel = TranscriptionModel.whisperTurbo
+    @State private var postProcessingEnabled: Bool = true
+    @State private var postProcessingModel: PostProcessingModel = .gptOss120b
+    @State private var postProcessingSystemPrompt: String = ""
 
-    /// Returns the name of the system feature the fn key is assigned to, or nil if unassigned.
-    /// macOS stores this in com.apple.HIToolbox under AppleFnUsageType:
-    ///   0 = Do Nothing, 1 = Change Input Source, 2 = Show Emoji & Symbols, 3 = Start Dictation
+    private var allPermissionsGranted: Bool {
+        model.hasMicrophonePermission && model.hasAccessibilityPermission && model.hasInputMonitoringPermission
+    }
+
+    private var permissionsGrantedCount: Int {
+        (model.hasMicrophonePermission ? 1 : 0)
+        + (model.hasAccessibilityPermission ? 1 : 0)
+        + (model.hasInputMonitoringPermission ? 1 : 0)
+    }
+
     private var fnKeyConflict: String? {
         guard hotKey.isFnKey else { return nil }
         let type = UserDefaults(suiteName: "com.apple.HIToolbox")?.integer(forKey: "AppleFnUsageType") ?? 0
@@ -99,18 +175,173 @@ struct SettingsView: View {
     }
 
     var body: some View {
-        Form {
-            Section("API Key") {
+        HStack(spacing: 0) {
+            // Sidebar
+            VStack(alignment: .leading, spacing: 4) {
+                Text("SETTINGS")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fontWeight(.semibold)
+                    .padding(.horizontal, 12)
+                    .padding(.top, 12)
+                    .padding(.bottom, 4)
+
+                ForEach(SettingsTab.allCases) { tab in
+                    Button(action: { selectedTab = tab }) {
+                        HStack(spacing: 8) {
+                            Image(systemName: tab.icon)
+                                .frame(width: 18)
+                            Text(tab.label)
+                            Spacer()
+                        }
+                        .padding(.vertical, 6)
+                        .padding(.horizontal, 10)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(selectedTab == tab
+                                      ? Color.accentColor.opacity(0.15)
+                                      : Color.clear)
+                        )
+                        .foregroundStyle(selectedTab == tab ? Color.accentColor : .primary)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.horizontal, 8)
+                }
+
+                Spacer()
+            }
+            .frame(width: 180)
+            .background(Color(nsColor: .windowBackgroundColor))
+
+            Divider()
+
+            // Content area
+            VStack(spacing: 0) {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 16) {
+                        switch selectedTab {
+                        case .general:
+                            generalPanel
+                        case .transcription:
+                            transcriptionPanel
+                        case .postProcessing:
+                            postProcessingPanel
+                        }
+                    }
+                    .padding(24)
+                }
+
+                Divider()
+
+                // Save footer
+                HStack {
+                    if !allPermissionsGranted {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.yellow)
+                        Text("All permissions must be granted before you can use SrizonVoice.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } else if model.isValidatingKey {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text("Validating key...")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else if let error = model.errorMessage {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.red)
+                        Text(error)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer()
+                    if allPermissionsGranted {
+                        Button("Save") {
+                            model.validateAndSaveAPIKey(
+                                apiKey,
+                                hotKey: hotKey,
+                                language: language,
+                                secondaryLanguage: secondaryLanguage,
+                                transcriptionModel: transcriptionModel,
+                                postProcessingEnabled: postProcessingEnabled,
+                                postProcessingModel: postProcessingModel,
+                                postProcessingSystemPrompt: postProcessingSystemPrompt
+                            ) { _ in }
+                        }
+                        .disabled(model.isValidatingKey)
+                        Button("Save & Close") {
+                            model.validateAndSaveAPIKey(
+                                apiKey,
+                                hotKey: hotKey,
+                                language: language,
+                                secondaryLanguage: secondaryLanguage,
+                                transcriptionModel: transcriptionModel,
+                                postProcessingEnabled: postProcessingEnabled,
+                                postProcessingModel: postProcessingModel,
+                                postProcessingSystemPrompt: postProcessingSystemPrompt
+                            ) { success in
+                                if success {
+                                    model.dismissSettingsWindow()
+                                }
+                            }
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(model.isValidatingKey)
+                    } else {
+                        Button("Grant Permissions (\(permissionsGrantedCount) of 3 given)") {
+                            model.requestPermissions()
+                        }
+                        .buttonStyle(.borderedProminent)
+                    }
+                }
+                .padding(.horizontal, 24)
+                .padding(.vertical, 12)
+            }
+        }
+        .frame(width: 750, height: 550)
+        .onAppear {
+            apiKey = model.settings.apiKey
+            hotKey = model.settings.hotKey
+            language = model.settings.language
+            secondaryLanguage = model.settings.secondaryLanguage
+            transcriptionModel = model.settings.transcriptionModel
+            postProcessingEnabled = model.settings.postProcessingEnabled
+            postProcessingModel = model.settings.postProcessingModel
+            postProcessingSystemPrompt = model.settings.postProcessingSystemPrompt.isEmpty
+                ? UserSettings.defaultSystemPrompt
+                : model.settings.postProcessingSystemPrompt
+            model.errorMessage = nil
+            model.refreshPermissions()
+        }
+    }
+
+    // MARK: - General Panel
+
+    @ViewBuilder
+    private var generalPanel: some View {
+        SettingsCard {
+            VStack(alignment: .leading, spacing: 10) {
+                SettingsCardHeader(title: "API Key", subtitle: "Your Groq API key for transcription")
                 SecureField("Groq API Key", text: $apiKey)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 4)
+                            .stroke(Color.red, lineWidth: allPermissionsGranted && apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 1.5 : 0)
+                    )
                     .onChange(of: apiKey) { _ in
                         model.errorMessage = nil
                     }
                 Link("Get your key from console.groq.com", destination: URL(string: "https://console.groq.com/keys")!)
+                    .font(.caption)
             }
+        }
 
-            Section("Shortcut") {
+        SettingsCard {
+            VStack(alignment: .leading, spacing: 10) {
+                SettingsCardHeader(title: "Shortcut", subtitle: "Hold to dictate, release to insert text")
                 HotKeyRecorderField(hotKey: $hotKey)
-                Text("Hold this shortcut anywhere you want to type, speak, then release to insert transcribed text. Suggested hotkeys: fn, ⌃⌥, ⌥⌘")
+                Text("Suggested hotkeys: fn, ⌃⌥, ⌥⌘")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 if let conflict = fnKeyConflict {
@@ -125,20 +356,69 @@ struct SettingsView: View {
                     .padding(.top, 2)
                 }
             }
+        }
 
-            Section("Model & Language") {
+        SettingsCard {
+            VStack(alignment: .leading, spacing: 10) {
+                SettingsCardHeader(title: "Permissions", subtitle: allPermissionsGranted ? nil : "All permissions are required to use SrizonVoice")
+                PermissionRow(title: "Microphone", granted: model.hasMicrophonePermission)
+                PermissionRow(title: "Accessibility", granted: model.hasAccessibilityPermission)
+                HStack {
+                    PermissionRow(
+                        title: model.hasInputMonitoringPermission
+                            ? "Input Monitoring"
+                            : "Input Monitoring (restart app to detect changes)",
+                        granted: model.hasInputMonitoringPermission
+                    )
+                    if !model.hasInputMonitoringPermission {
+                        Spacer()
+                        Button("Restart App") {
+                            Self.restartApp()
+                        }
+                        .controlSize(.small)
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - Helpers
+
+    private static func restartApp() {
+        let url = Bundle.main.bundleURL
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+        task.arguments = ["-n", url.path]
+        try? task.run()
+        NSApp.terminate(nil)
+    }
+
+    // MARK: - Transcription Panel
+
+    @ViewBuilder
+    private var transcriptionPanel: some View {
+        SettingsCard {
+            VStack(alignment: .leading, spacing: 10) {
+                SettingsCardHeader(title: "Model", subtitle: "Choose the transcription model")
                 Picker("Model", selection: $transcriptionModel) {
-                    ForEach(TranscriptionModel.allCases, id: \.self) { model in
-                        Text(model.displayName).tag(model)
+                    ForEach(TranscriptionModel.allCases, id: \.self) { m in
+                        Text(m.displayName).tag(m)
                     }
                 }
                 .pickerStyle(.radioGroup)
+                .labelsHidden()
+            }
+        }
+
+        SettingsCard {
+            VStack(alignment: .leading, spacing: 10) {
+                SettingsCardHeader(title: "Language", subtitle: "Primary and optional secondary language")
                 Picker("Primary Language", selection: $language) {
                     ForEach(LanguageOption.allCases, id: \.self) { option in
                         Text(option.displayName).tag(option)
                     }
                 }
-                
+
                 Picker("Secondary Language (Optional)", selection: $secondaryLanguage) {
                     Text("None").tag(nil as LanguageOption?)
                     ForEach(LanguageOption.allCases, id: \.self) { option in
@@ -146,59 +426,48 @@ struct SettingsView: View {
                     }
                 }
             }
+        }
+    }
 
-            Section("Permissions") {
-                PermissionRow(title: "Microphone", granted: model.hasMicrophonePermission)
-                PermissionRow(title: "Accessibility", granted: model.hasAccessibilityPermission)
-                PermissionRow(title: "Input Monitoring", granted: model.hasInputMonitoringPermission)
-                Button("Grant Permissions") {
-                    model.requestPermissions()
-                }
-            }
+    // MARK: - Post-Processing Panel
 
-            HStack {
-                if model.isValidatingKey {
-                    ProgressView()
-                        .controlSize(.small)
-                    Text("Validating key...")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                } else if let error = model.errorMessage {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.red)
-                    Text(error)
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer()
-                Button("Save") {
-                    model.validateAndSaveAPIKey(
-                        apiKey,
-                        hotKey: hotKey,
-                        language: language,
-                        secondaryLanguage: secondaryLanguage,
-                        transcriptionModel: transcriptionModel
-                    ) { success in
-                        if success {
-                            model.dismissSettingsWindow()
-                        }
-                    }
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(model.isValidatingKey)
+    @ViewBuilder
+    private var postProcessingPanel: some View {
+        SettingsCard {
+            VStack(alignment: .leading, spacing: 10) {
+                SettingsCardHeader(title: "Post-Processing", subtitle: "Run transcriptions through an LLM")
+                Toggle("Enable Post-Processing", isOn: $postProcessingEnabled)
             }
         }
-        .padding(20)
-        .frame(width: 560)
-        .onAppear {
-            apiKey = model.settings.apiKey
-            hotKey = model.settings.hotKey
-            language = model.settings.language
-            secondaryLanguage = model.settings.secondaryLanguage
-            transcriptionModel = model.settings.transcriptionModel
-            model.errorMessage = nil
-            model.requestPermissions()
+
+        if postProcessingEnabled {
+            SettingsCard {
+                VStack(alignment: .leading, spacing: 10) {
+                    SettingsCardHeader(title: "Model", subtitle: "LLM model for post-processing")
+                    Picker("Model", selection: $postProcessingModel) {
+                        ForEach(PostProcessingModel.allCases, id: \.self) { m in
+                            Text(m.displayName).tag(m)
+                        }
+                    }
+                    .pickerStyle(.radioGroup)
+                    .labelsHidden()
+                }
+            }
+            .transition(.opacity)
+
+            SettingsCard {
+                VStack(alignment: .leading, spacing: 10) {
+                    SettingsCardHeader(title: "System Prompt", subtitle: "Instructions for the LLM")
+                    TextEditor(text: $postProcessingSystemPrompt)
+                        .font(.system(.body, design: .monospaced))
+                        .frame(height: 120)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 4)
+                                .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
+                        )
+                }
+            }
+            .transition(.opacity)
         }
     }
 }

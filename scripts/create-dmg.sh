@@ -9,7 +9,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIST_DIR="$ROOT_DIR/dist"
 APP_NAME="SrizonVoice"
 APP_BUNDLE="$DIST_DIR/$APP_NAME.app"
-VERSION="1.0.0"
+VERSION="2.0.0"
 DMG_NAME="$APP_NAME-$VERSION"
 DMG_PATH="$DIST_DIR/$DMG_NAME.dmg"
 DMG_TEMP="$DIST_DIR/$DMG_NAME-temp.dmg"
@@ -26,6 +26,15 @@ YELLOW='\033[1;33m'
 NC='\033[0m'
 
 echo -e "${BLUE}Creating DMG for $APP_NAME v$VERSION${NC}"
+
+# Step 0: Detach any previously mounted SrizonVoice volumes to avoid name conflicts
+for vol in /Volumes/$VOL_NAME /Volumes/"$VOL_NAME "*/; do
+  if mount | grep -q "on ${vol%/} "; then
+    dev=$(mount | grep "on ${vol%/} " | awk '{print $1}' | sed 's/s[0-9]*$//')
+    echo "Detaching stale volume: ${vol%/}"
+    hdiutil detach "$dev" -force -quiet 2>/dev/null || true
+  fi
+done
 
 # Step 1: Build the app if needed
 if [[ ! -d "$APP_BUNDLE" ]] || [[ "$ROOT_DIR/Sources" -nt "$APP_BUNDLE" ]]; then

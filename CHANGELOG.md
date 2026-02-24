@@ -5,6 +5,22 @@ All notable changes to SrizonVoice will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0] - 2026-02-24
+
+### Changed
+- Redesigned settings screen with sidebar navigation and card-based layout
+- Human-friendly model names ("Prefer Speed", "Prefer Accuracy") instead of technical names
+- Permissions are now requested only when user clicks "Grant Permissions"
+- Save/Close buttons hidden until all permissions are granted
+- Default post-processing model changed to GPT-OSS 120B
+- Input Monitoring permission row shows restart hint and restart button when not granted
+
+### Added
+- Settings sidebar with General, Transcription, and Post-Processing tabs
+- Separate "Save" and "Save & Close" buttons in settings footer
+- Red outline on API key field when empty and all permissions are granted
+- App restart button for detecting Input Monitoring permission changes
+
 ## [1.0.0] - 2026-02-15
 
 ### Added
@@ -40,4 +56,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CGEvent tap for global Esc key handling
 - SMAppService for launch-at-login registration
 
+[2.0.0]: https://github.com/yourusername/voice/releases/tag/v2.0.0
 [1.0.0]: https://github.com/yourusername/voice/releases/tag/v1.0.0

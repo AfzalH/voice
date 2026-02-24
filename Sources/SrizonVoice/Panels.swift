@@ -261,10 +261,17 @@ final class SettingsWindowManager: NSObject, NSWindowDelegate {
 
         let root = SettingsView(model: model)
         let hosting = NSHostingController(rootView: root)
+        // Prevent NSHostingView from updating the window's min/max content
+        // size during constraint updates.  Without this, the hosting view
+        // re-enters the constraint system via
+        // updateWindowContentSizeExtremaIfNecessary → setNeedsUpdateConstraints
+        // while AppKit is already inside an update-constraints pass, crashing
+        // in _postWindowNeedsUpdateConstraints.
+        hosting.sizingOptions = .intrinsicContentSize
         let newWindow = NSWindow(contentViewController: hosting)
         newWindow.title = "SrizonVoice Settings"
-        newWindow.styleMask = [.titled, .closable, .miniaturizable]
-        newWindow.setContentSize(NSSize(width: 600, height: 480))
+        newWindow.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+        newWindow.setContentSize(NSSize(width: 750, height: 550))
         newWindow.isReleasedWhenClosed = false
         newWindow.level = .normal
         newWindow.delegate = self
@@ -276,15 +283,14 @@ final class SettingsWindowManager: NSObject, NSWindowDelegate {
 
     func hide() {
         guard let window else { return }
-        // Detach the SwiftUI hosting controller synchronously so that
-        // any pending @Published updates (from saveSettings, errorMessage,
-        // isValidatingKey) never reach a torn-down view hierarchy.
-        // The actual window close happens on the next run-loop iteration
-        // after the view tree is already gone.
+        // Order the window out first so that AppKit's display-cycle
+        // observer stops processing constraint updates for it.
+        // Without this, the NSHostingView can fire updateConstraints
+        // after the content view controller is detached, crashing in
+        // _postWindowNeedsUpdateConstraints.
+        window.orderOut(nil)
         window.contentViewController = nil
-        DispatchQueue.main.async {
-            window.close()
-        }
+        window.close()
     }
 
     // MARK: - NSWindowDelegate
