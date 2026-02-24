@@ -82,6 +82,9 @@ struct SettingsView: View {
     @State private var language = LanguageOption.english
     @State private var secondaryLanguage: LanguageOption?
     @State private var transcriptionModel = TranscriptionModel.whisperTurbo
+    @State private var postProcessingEnabled: Bool = true
+    @State private var postProcessingModel: PostProcessingModel = .gptOss20b
+    @State private var postProcessingSystemPrompt: String = ""
 
     /// Returns the name of the system feature the fn key is assigned to, or nil if unassigned.
     /// macOS stores this in com.apple.HIToolbox under AppleFnUsageType:
@@ -147,6 +150,32 @@ struct SettingsView: View {
                 }
             }
 
+            Section("LLM Post-Processing") {
+                Toggle("Enable Post-Processing", isOn: $postProcessingEnabled)
+
+                if postProcessingEnabled {
+                    Picker("Model", selection: $postProcessingModel) {
+                        ForEach(PostProcessingModel.allCases, id: \.self) { model in
+                            Text(model.displayName).tag(model)
+                        }
+                    }
+                    .pickerStyle(.radioGroup)
+
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("System Prompt")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        TextEditor(text: $postProcessingSystemPrompt)
+                            .font(.system(.body, design: .monospaced))
+                            .frame(height: 100)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 4)
+                                    .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
+                            )
+                    }
+                }
+            }
+
             Section("Permissions") {
                 PermissionRow(title: "Microphone", granted: model.hasMicrophonePermission)
                 PermissionRow(title: "Accessibility", granted: model.hasAccessibilityPermission)
@@ -178,7 +207,10 @@ struct SettingsView: View {
                         hotKey: hotKey,
                         language: language,
                         secondaryLanguage: secondaryLanguage,
-                        transcriptionModel: transcriptionModel
+                        transcriptionModel: transcriptionModel,
+                        postProcessingEnabled: postProcessingEnabled,
+                        postProcessingModel: postProcessingModel,
+                        postProcessingSystemPrompt: postProcessingSystemPrompt
                     ) { success in
                         if success {
                             model.dismissSettingsWindow()
@@ -197,6 +229,11 @@ struct SettingsView: View {
             language = model.settings.language
             secondaryLanguage = model.settings.secondaryLanguage
             transcriptionModel = model.settings.transcriptionModel
+            postProcessingEnabled = model.settings.postProcessingEnabled
+            postProcessingModel = model.settings.postProcessingModel
+            postProcessingSystemPrompt = model.settings.postProcessingSystemPrompt.isEmpty
+                ? UserSettings.defaultSystemPrompt
+                : model.settings.postProcessingSystemPrompt
             model.errorMessage = nil
             model.requestPermissions()
         }

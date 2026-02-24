@@ -123,6 +123,9 @@ final class AppModel: ObservableObject {
         language: LanguageOption? = nil,
         secondaryLanguage: LanguageOption? = nil,
         transcriptionModel: TranscriptionModel = .whisperTurbo,
+        postProcessingEnabled: Bool = true,
+        postProcessingModel: PostProcessingModel = .gptOss20b,
+        postProcessingSystemPrompt: String = "",
         completion: @escaping (Bool) -> Void
     ) {
         let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -141,6 +144,11 @@ final class AppModel: ObservableObject {
                 settings.transcriptionModel = transcriptionModel
                 if let language { settings.language = language }
                 settings.secondaryLanguage = secondaryLanguage
+                settings.postProcessingEnabled = postProcessingEnabled
+                settings.postProcessingModel = postProcessingModel
+                settings.postProcessingSystemPrompt = postProcessingSystemPrompt.isEmpty
+                    ? UserSettings.defaultSystemPrompt
+                    : postProcessingSystemPrompt
                 saveSettings()
                 errorMessage = nil
                 completion(true)
