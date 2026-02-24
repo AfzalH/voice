@@ -271,7 +271,7 @@ final class SettingsWindowManager: NSObject, NSWindowDelegate {
         let newWindow = NSWindow(contentViewController: hosting)
         newWindow.title = "SrizonVoice Settings"
         newWindow.styleMask = [.titled, .closable, .miniaturizable, .resizable]
-        newWindow.setContentSize(NSSize(width: 600, height: 580))
+        newWindow.setContentSize(NSSize(width: 750, height: 550))
         newWindow.isReleasedWhenClosed = false
         newWindow.level = .normal
         newWindow.delegate = self

@@ -29,7 +29,13 @@ final class AppModel: ObservableObject {
         ensureLaunchAtLogin()
         refreshPermissions()
         configureCallbacks()
-        registerHotKey()
+        // Only register the hotkey if we already have permissions.
+        // On first launch the user hasn't granted Input Monitoring yet and
+        // calling CGEvent.tapCreate / CGPreflightListenEventAccess can
+        // trigger the system dialog before the user is ready.
+        if hasInputMonitoringPermission {
+            registerHotKey()
+        }
         bindStopControls()
     }
 
@@ -92,10 +98,14 @@ final class AppModel: ObservableObject {
     @Published var hasInputMonitoringPermission = false
 
     func requestPermissions() {
-        Task {
+        Task { @MainActor in
             // Step 1: Microphone — system shows its own dialog
-            _ = await permissionManager.requestMicrophonePermission()
-            refreshPermissions()
+            if !permissionManager.microphonePermissionGranted {
+                _ = await permissionManager.requestMicrophonePermission()
+                refreshPermissions()
+                // Small delay so the mic dialog fully dismisses before the next one
+                try? await Task.sleep(nanoseconds: 500_000_000)
+            }
 
             // Step 2: Accessibility — wait until granted before moving on
             if !permissionManager.accessibilityPermissionGranted {
@@ -106,10 +116,14 @@ final class AppModel: ObservableObject {
                     guard !Task.isCancelled else { return }
                 }
                 refreshPermissions()
+                try? await Task.sleep(nanoseconds: 500_000_000)
             }
 
             // Step 3: Input Monitoring — only prompt after accessibility is granted
             if !permissionManager.inputMonitoringPermissionGranted {
+                // Deactivate so the system dialog appears in front of the settings window
+                NSApp.deactivate()
+                try? await Task.sleep(nanoseconds: 200_000_000)
                 permissionManager.requestInputMonitoringPermission()
                 refreshPermissions()
             }
@@ -124,7 +138,7 @@ final class AppModel: ObservableObject {
         secondaryLanguage: LanguageOption? = nil,
         transcriptionModel: TranscriptionModel = .whisperTurbo,
         postProcessingEnabled: Bool = true,
-        postProcessingModel: PostProcessingModel = .gptOss20b,
+        postProcessingModel: PostProcessingModel = .gptOss120b,
         postProcessingSystemPrompt: String = "",
         completion: @escaping (Bool) -> Void
     ) {
@@ -269,7 +283,7 @@ final class AppModel: ObservableObject {
         escapeKeyMonitor.start()
     }
 
-    private func refreshPermissions() {
+    func refreshPermissions() {
         hasMicrophonePermission = permissionManager.microphonePermissionGranted
         hasAccessibilityPermission = permissionManager.accessibilityPermissionGranted
         hasInputMonitoringPermission = permissionManager.inputMonitoringPermissionGranted

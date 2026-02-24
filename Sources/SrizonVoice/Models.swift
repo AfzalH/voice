@@ -326,8 +326,8 @@ enum TranscriptionModel: String, CaseIterable, Codable {
 
     var displayName: String {
         switch self {
-        case .whisperTurbo: return "Whisper Large v3 Turbo (Fast)"
-        case .whisperV3:    return "Whisper Large v3 (Accurate)"
+        case .whisperTurbo: return "Prefer Speed"
+        case .whisperV3:    return "Prefer Accuracy"
         }
     }
 }
@@ -335,15 +335,15 @@ enum TranscriptionModel: String, CaseIterable, Codable {
 // MARK: - PostProcessingModel
 
 enum PostProcessingModel: String, CaseIterable, Codable {
-    case llama33Versatile = "llama-3.3-70b-versatile"
     case gptOss120b = "openai/gpt-oss-120b"
     case gptOss20b = "openai/gpt-oss-20b"
+    case llama33Versatile = "llama-3.3-70b-versatile"
 
     var displayName: String {
         switch self {
-        case .llama33Versatile: return "llama-3.3-70b-versatile"
-        case .gptOss120b: return "openai/gpt-oss-120b"
-        case .gptOss20b: return "openai/gpt-oss-20b"
+        case .gptOss120b: return "Prefer Accuracy"
+        case .gptOss20b: return "Prefer Speed"
+        case .llama33Versatile: return "Alternative (Llama)"
         }
     }
 }
@@ -368,7 +368,7 @@ final class UserSettings {
     var secondaryLanguage: LanguageOption?
     var transcriptionModel: TranscriptionModel = .whisperTurbo
     var postProcessingEnabled: Bool = true
-    var postProcessingModel: PostProcessingModel = .gptOss20b
+    var postProcessingModel: PostProcessingModel = .gptOss120b
     var postProcessingSystemPrompt: String = ""
 
     func load() {
