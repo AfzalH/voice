@@ -108,4 +108,4 @@ SrizonVoice records audio locally and sends it directly to Groq's servers using 
 
 ## Further Reading
 
-See [How-it-works.md](how-it-works.md) for a detailed technical walkthrough of the entire codebase.
+See [How-it-works.md](How-it-works.md) for a detailed technical walkthrough of the entire codebase.
