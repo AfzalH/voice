@@ -186,7 +186,9 @@ final class DictationCoordinator {
                     transcript: transcript,
                     model: settings.postProcessingModel,
                     systemPrompt: settings.postProcessingSystemPrompt,
-                    targetAppName: targetAppName
+                    targetAppName: targetAppName,
+                    useGemini: settings.useGemini,
+                    geminiApiKey: settings.geminiApiKey
                 )
                 transcript = processedText
             }
@@ -411,17 +413,43 @@ final class GroqTranscriptionClient {
 
 final class LLMClient {
     private let session = URLSession(configuration: .default)
-    private let endpoint = "https://api.groq.com/openai/v1/chat/completions"
+    private let groqEndpoint = "https://api.groq.com/openai/v1/chat/completions"
 
-    /// Sends the transcript to Groq's LLM API for post-processing.
+    /// Sends the transcript to the configured LLM API for post-processing.
     func postProcess(
+        apiKey: String,
+        transcript: String,
+        model: PostProcessingModel,
+        systemPrompt: String,
+        targetAppName: String,
+        useGemini: Bool = false,
+        geminiApiKey: String = ""
+    ) async throws -> String {
+        if useGemini {
+            return try await postProcessWithGemini(
+                apiKey: geminiApiKey,
+                transcript: transcript,
+                systemPrompt: systemPrompt,
+                targetAppName: targetAppName
+            )
+        }
+        return try await postProcessWithGroq(
+            apiKey: apiKey,
+            transcript: transcript,
+            model: model,
+            systemPrompt: systemPrompt,
+            targetAppName: targetAppName
+        )
+    }
+
+    private func postProcessWithGroq(
         apiKey: String,
         transcript: String,
         model: PostProcessingModel,
         systemPrompt: String,
         targetAppName: String
     ) async throws -> String {
-        guard let url = URL(string: endpoint) else { throw DictationError.invalidURL }
+        guard let url = URL(string: groqEndpoint) else { throw DictationError.invalidURL }
 
         // Append target app context to the system prompt
         let appContext = " Note: The dictation was triggered in the context of: \(targetAppName)."
@@ -459,6 +487,77 @@ final class LLMClient {
             throw DictationError.serverError(body.isEmpty ? "Post-processing failed." : body)
         }
         return content
+    }
+
+    private static let geminiModel = "gemini-3.1-flash-lite-preview"
+
+    private func postProcessWithGemini(
+        apiKey: String,
+        transcript: String,
+        systemPrompt: String,
+        targetAppName: String
+    ) async throws -> String {
+        let encodedKey = apiKey.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? apiKey
+        let endpoint = "https://generativelanguage.googleapis.com/v1beta/models/\(Self.geminiModel):generateContent?key=\(encodedKey)"
+        guard let url = URL(string: endpoint) else { throw DictationError.invalidURL }
+
+        let appContext = " Note: The dictation was triggered in the context of: \(targetAppName)."
+        let enhancedPrompt = systemPrompt + appContext
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let body: [String: Any] = [
+            "system_instruction": [
+                "parts": [["text": enhancedPrompt]]
+            ],
+            "contents": [
+                ["role": "user", "parts": [["text": transcript]]]
+            ],
+            "generationConfig": [
+                "temperature": 0.3
+            ]
+        ]
+
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse else { throw DictationError.invalidResponse }
+        if http.statusCode == 400 || http.statusCode == 401 || http.statusCode == 403 {
+            let body = String(data: data, encoding: .utf8) ?? ""
+            if body.contains("API_KEY_INVALID") || body.contains("PERMISSION_DENIED") {
+                throw DictationError.invalidAPIKey
+            }
+            throw DictationError.serverError(body.isEmpty ? "Gemini post-processing failed." : body)
+        }
+        guard (200...299).contains(http.statusCode),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let candidates = json["candidates"] as? [[String: Any]],
+              let firstCandidate = candidates.first,
+              let content = firstCandidate["content"] as? [String: Any],
+              let parts = content["parts"] as? [[String: Any]],
+              let text = parts.first?["text"] as? String
+        else {
+            let body = String(data: data, encoding: .utf8) ?? ""
+            throw DictationError.serverError(body.isEmpty ? "Gemini post-processing failed." : body)
+        }
+        return text
+    }
+
+    /// Validates a Gemini API key by listing models.
+    static func validateGeminiAPIKey(_ apiKey: String) async -> Bool {
+        let encodedKey = apiKey.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? apiKey
+        guard let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models?key=\(encodedKey)") else { return false }
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        do {
+            let (_, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse else { return false }
+            return (200...299).contains(http.statusCode)
+        } catch {
+            return false
+        }
     }
 }
 

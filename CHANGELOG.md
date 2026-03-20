@@ -5,6 +5,12 @@ All notable changes to SrizonVoice will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0] - 2026-03-20
+
+### Added
+- Gemini post-processing support as an alternative to Groq
+- Improved post-processing prompt: short phrases and search queries no longer get unwanted capitalization or trailing periods
+
 ## [2.0.0] - 2026-02-24
 
 ### Changed
@@ -56,5 +62,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CGEvent tap for global Esc key handling
 - SMAppService for launch-at-login registration
 
-[2.0.0]: https://github.com/yourusername/voice/releases/tag/v2.0.0
-[1.0.0]: https://github.com/yourusername/voice/releases/tag/v1.0.0
+[2.1.0]: https://github.com/AfzalH/voice/releases/tag/v2.1.0
+[2.0.0]: https://github.com/AfzalH/voice/releases/tag/v2.0.0
+[1.0.0]: https://github.com/AfzalH/voice/releases/tag/v1.0.0

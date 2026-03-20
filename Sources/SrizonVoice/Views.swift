@@ -151,6 +151,8 @@ struct SettingsView: View {
     @State private var postProcessingEnabled: Bool = true
     @State private var postProcessingModel: PostProcessingModel = .gptOss120b
     @State private var postProcessingSystemPrompt: String = ""
+    @State private var useGemini: Bool = false
+    @State private var geminiApiKey: String = ""
 
     private var allPermissionsGranted: Bool {
         model.hasMicrophonePermission && model.hasAccessibilityPermission && model.hasInputMonitoringPermission
@@ -267,7 +269,9 @@ struct SettingsView: View {
                                 transcriptionModel: transcriptionModel,
                                 postProcessingEnabled: postProcessingEnabled,
                                 postProcessingModel: postProcessingModel,
-                                postProcessingSystemPrompt: postProcessingSystemPrompt
+                                postProcessingSystemPrompt: postProcessingSystemPrompt,
+                                useGemini: useGemini,
+                                geminiApiKey: geminiApiKey
                             ) { _ in }
                         }
                         .disabled(model.isValidatingKey)
@@ -280,7 +284,9 @@ struct SettingsView: View {
                                 transcriptionModel: transcriptionModel,
                                 postProcessingEnabled: postProcessingEnabled,
                                 postProcessingModel: postProcessingModel,
-                                postProcessingSystemPrompt: postProcessingSystemPrompt
+                                postProcessingSystemPrompt: postProcessingSystemPrompt,
+                                useGemini: useGemini,
+                                geminiApiKey: geminiApiKey
                             ) { success in
                                 if success {
                                     model.dismissSettingsWindow()
@@ -312,6 +318,8 @@ struct SettingsView: View {
             postProcessingSystemPrompt = model.settings.postProcessingSystemPrompt.isEmpty
                 ? UserSettings.defaultSystemPrompt
                 : model.settings.postProcessingSystemPrompt
+            useGemini = model.settings.useGemini
+            geminiApiKey = model.settings.geminiApiKey
             model.errorMessage = nil
             model.refreshPermissions()
         }
@@ -437,23 +445,43 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 10) {
                 SettingsCardHeader(title: "Post-Processing", subtitle: "Run transcriptions through an LLM")
                 Toggle("Enable Post-Processing", isOn: $postProcessingEnabled)
+
+                if postProcessingEnabled {
+                    Toggle("Use Gemini instead of Groq for post-processing", isOn: $useGemini)
+                }
             }
         }
 
         if postProcessingEnabled {
-            SettingsCard {
-                VStack(alignment: .leading, spacing: 10) {
-                    SettingsCardHeader(title: "Model", subtitle: "LLM model for post-processing")
-                    Picker("Model", selection: $postProcessingModel) {
-                        ForEach(PostProcessingModel.allCases, id: \.self) { m in
-                            Text(m.displayName).tag(m)
-                        }
+            if useGemini {
+                SettingsCard {
+                    VStack(alignment: .leading, spacing: 10) {
+                        SettingsCardHeader(title: "Gemini API Key", subtitle: "Required for Gemini post-processing (model: gemini-3.1-flash-lite-preview)")
+                        SecureField("Gemini API Key", text: $geminiApiKey)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 4)
+                                    .stroke(Color.red, lineWidth: geminiApiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 1.5 : 0)
+                            )
+                        Link("Get your key from aistudio.google.com", destination: URL(string: "https://aistudio.google.com/apikey")!)
+                            .font(.caption)
                     }
-                    .pickerStyle(.radioGroup)
-                    .labelsHidden()
                 }
+                .transition(.opacity)
+            } else {
+                SettingsCard {
+                    VStack(alignment: .leading, spacing: 10) {
+                        SettingsCardHeader(title: "Model", subtitle: "LLM model for post-processing")
+                        Picker("Model", selection: $postProcessingModel) {
+                            ForEach(PostProcessingModel.allCases, id: \.self) { m in
+                                Text(m.displayName).tag(m)
+                            }
+                        }
+                        .pickerStyle(.radioGroup)
+                        .labelsHidden()
+                    }
+                }
+                .transition(.opacity)
             }
-            .transition(.opacity)
 
             SettingsCard {
                 VStack(alignment: .leading, spacing: 10) {

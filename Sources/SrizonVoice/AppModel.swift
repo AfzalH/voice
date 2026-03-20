@@ -130,7 +130,7 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// Validates the key against the Groq API, then saves all settings on success.
+    /// Validates the key against the Groq API (and Gemini if enabled), then saves all settings on success.
     func validateAndSaveAPIKey(
         _ key: String,
         hotKey: HotKey,
@@ -140,6 +140,8 @@ final class AppModel: ObservableObject {
         postProcessingEnabled: Bool = true,
         postProcessingModel: PostProcessingModel = .gptOss120b,
         postProcessingSystemPrompt: String = "",
+        useGemini: Bool = false,
+        geminiApiKey: String = "",
         completion: @escaping (Bool) -> Void
     ) {
         let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -148,28 +150,52 @@ final class AppModel: ObservableObject {
             completion(false)
             return
         }
+
+        // Validate Gemini API key if Gemini post-processing is enabled
+        let trimmedGeminiKey = geminiApiKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        if postProcessingEnabled && useGemini && trimmedGeminiKey.isEmpty {
+            showError("Gemini API key cannot be empty when Gemini post-processing is enabled.", autoDismiss: false)
+            completion(false)
+            return
+        }
+
         isValidatingKey = true
         Task {
-            let valid = await GroqTranscriptionClient.validateAPIKey(trimmed)
-            isValidatingKey = false
-            if valid {
-                settings.apiKey = trimmed
-                settings.hotKey = hotKey
-                settings.transcriptionModel = transcriptionModel
-                if let language { settings.language = language }
-                settings.secondaryLanguage = secondaryLanguage
-                settings.postProcessingEnabled = postProcessingEnabled
-                settings.postProcessingModel = postProcessingModel
-                settings.postProcessingSystemPrompt = postProcessingSystemPrompt.isEmpty
-                    ? UserSettings.defaultSystemPrompt
-                    : postProcessingSystemPrompt
-                saveSettings()
-                errorMessage = nil
-                completion(true)
-            } else {
-                showError("Invalid API key. Please check and try again.", autoDismiss: false)
+            let groqValid = await GroqTranscriptionClient.validateAPIKey(trimmed)
+            guard groqValid else {
+                isValidatingKey = false
+                showError("Invalid Groq API key. Please check and try again.", autoDismiss: false)
                 completion(false)
+                return
             }
+
+            // Validate Gemini key if enabled
+            if postProcessingEnabled && useGemini {
+                let geminiValid = await LLMClient.validateGeminiAPIKey(trimmedGeminiKey)
+                guard geminiValid else {
+                    isValidatingKey = false
+                    showError("Invalid Gemini API key. Please check and try again.", autoDismiss: false)
+                    completion(false)
+                    return
+                }
+            }
+
+            isValidatingKey = false
+            settings.apiKey = trimmed
+            settings.hotKey = hotKey
+            settings.transcriptionModel = transcriptionModel
+            if let language { settings.language = language }
+            settings.secondaryLanguage = secondaryLanguage
+            settings.postProcessingEnabled = postProcessingEnabled
+            settings.postProcessingModel = postProcessingModel
+            settings.postProcessingSystemPrompt = postProcessingSystemPrompt.isEmpty
+                ? UserSettings.defaultSystemPrompt
+                : postProcessingSystemPrompt
+            settings.useGemini = useGemini
+            settings.geminiApiKey = trimmedGeminiKey
+            saveSettings()
+            errorMessage = nil
+            completion(true)
         }
     }
 
