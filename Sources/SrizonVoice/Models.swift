@@ -355,7 +355,7 @@ final class UserSettings {
         static let apiKey                  = "groq.apiKey"
         static let hotKey                  = "app.hotKey"
         static let language                = "dictation.language"
-        static let secondaryLanguage       = "dictation.secondaryLanguage"
+        static let recentLanguages         = "dictation.recentLanguages"
         static let transcriptionModel      = "groq.transcriptionModel"
         static let postProcessingEnabled    = "llm.postProcessingEnabled"
         static let postProcessingModel     = "llm.postProcessingModel"
@@ -367,7 +367,7 @@ final class UserSettings {
     var apiKey = ""
     var hotKey = HotKey.defaultValue
     var language: LanguageOption = .english
-    var secondaryLanguage: LanguageOption?
+    var recentLanguages: [LanguageOption] = []
     var transcriptionModel: TranscriptionModel = .whisperTurbo
     var postProcessingEnabled: Bool = true
     var postProcessingModel: PostProcessingModel = .gptOss120b
@@ -389,10 +389,8 @@ final class UserSettings {
         {
             language = option
         }
-        if let raw = defaults.string(forKey: Key.secondaryLanguage),
-           let option = LanguageOption(rawValue: raw)
-        {
-            secondaryLanguage = option
+        if let rawArray = defaults.stringArray(forKey: Key.recentLanguages) {
+            recentLanguages = rawArray.compactMap { LanguageOption(rawValue: $0) }
         }
         if let raw = defaults.string(forKey: Key.transcriptionModel),
            let model = TranscriptionModel(rawValue: raw)
@@ -426,11 +424,7 @@ final class UserSettings {
         defaults.set(postProcessingSystemPrompt, forKey: Key.postProcessingSystemPrompt)
         defaults.set(useGemini, forKey: Key.useGemini)
         defaults.set(geminiApiKey, forKey: Key.geminiApiKey)
-        if let secondary = secondaryLanguage {
-            defaults.set(secondary.rawValue, forKey: Key.secondaryLanguage)
-        } else {
-            defaults.removeObject(forKey: Key.secondaryLanguage)
-        }
+        defaults.set(recentLanguages.map(\.rawValue), forKey: Key.recentLanguages)
         if let data = try? JSONEncoder().encode(hotKey) {
             defaults.set(data, forKey: Key.hotKey)
         }

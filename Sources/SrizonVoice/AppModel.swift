@@ -83,13 +83,20 @@ final class AppModel: ObservableObject {
 
     func switchLanguage(_ language: LanguageOption) {
         objectWillChange.send()
+        // Track the old language in recents
+        let oldLanguage = settings.language
+        if oldLanguage != language {
+            var recents = settings.recentLanguages.filter { $0 != language && $0 != oldLanguage }
+            recents.insert(oldLanguage, at: 0)
+            settings.recentLanguages = Array(recents.prefix(3))
+        }
         settings.language = language
         saveSettings()
     }
-    
-    func switchSecondaryLanguage(_ language: LanguageOption?) {
+
+    func togglePostProcessing() {
         objectWillChange.send()
-        settings.secondaryLanguage = language
+        settings.postProcessingEnabled.toggle()
         saveSettings()
     }
 
@@ -135,7 +142,6 @@ final class AppModel: ObservableObject {
         _ key: String,
         hotKey: HotKey,
         language: LanguageOption? = nil,
-        secondaryLanguage: LanguageOption? = nil,
         transcriptionModel: TranscriptionModel = .whisperTurbo,
         postProcessingEnabled: Bool = true,
         postProcessingModel: PostProcessingModel = .gptOss120b,
@@ -185,7 +191,6 @@ final class AppModel: ObservableObject {
             settings.hotKey = hotKey
             settings.transcriptionModel = transcriptionModel
             if let language { settings.language = language }
-            settings.secondaryLanguage = secondaryLanguage
             settings.postProcessingEnabled = postProcessingEnabled
             settings.postProcessingModel = postProcessingModel
             settings.postProcessingSystemPrompt = postProcessingSystemPrompt.isEmpty

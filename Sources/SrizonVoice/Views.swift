@@ -32,7 +32,7 @@ struct MenuBarContentView: View {
                 }
             }
 
-            Picker("Primary Language", selection: Binding(
+            Picker("Language", selection: Binding(
                 get: { model.settings.language },
                 set: { model.switchLanguage($0) }
             )) {
@@ -40,16 +40,29 @@ struct MenuBarContentView: View {
                     Text(language.displayName).tag(language)
                 }
             }
-            
-            Picker("Secondary Language", selection: Binding(
-                get: { model.settings.secondaryLanguage },
-                set: { model.switchSecondaryLanguage($0) }
-            )) {
-                Text("None").tag(nil as LanguageOption?)
-                ForEach(LanguageOption.allCases, id: \.self) { language in
-                    Text(language.displayName).tag(language as LanguageOption?)
+
+            if !model.settings.recentLanguages.isEmpty {
+                HStack(spacing: 6) {
+                    Text("Recent:")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    ForEach(model.settings.recentLanguages.filter { $0 != model.settings.language }, id: \.self) { lang in
+                        Button(action: { model.switchLanguage(lang) }) {
+                            Text(lang.displayName)
+                                .font(.caption)
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                    }
                 }
             }
+
+            Toggle("Post-Processing", isOn: Binding(
+                get: { model.settings.postProcessingEnabled },
+                set: { _ in model.togglePostProcessing() }
+            ))
+            .toggleStyle(.switch)
+            .controlSize(.small)
 
             if let error = model.errorMessage {
                 Text(error)
@@ -146,7 +159,6 @@ struct SettingsView: View {
     @State private var apiKey: String = ""
     @State private var hotKey = HotKey.defaultValue
     @State private var language = LanguageOption.english
-    @State private var secondaryLanguage: LanguageOption?
     @State private var transcriptionModel = TranscriptionModel.whisperTurbo
     @State private var postProcessingEnabled: Bool = true
     @State private var postProcessingModel: PostProcessingModel = .gptOss120b
@@ -265,7 +277,6 @@ struct SettingsView: View {
                                 apiKey,
                                 hotKey: hotKey,
                                 language: language,
-                                secondaryLanguage: secondaryLanguage,
                                 transcriptionModel: transcriptionModel,
                                 postProcessingEnabled: postProcessingEnabled,
                                 postProcessingModel: postProcessingModel,
@@ -280,7 +291,6 @@ struct SettingsView: View {
                                 apiKey,
                                 hotKey: hotKey,
                                 language: language,
-                                secondaryLanguage: secondaryLanguage,
                                 transcriptionModel: transcriptionModel,
                                 postProcessingEnabled: postProcessingEnabled,
                                 postProcessingModel: postProcessingModel,
@@ -311,7 +321,6 @@ struct SettingsView: View {
             apiKey = model.settings.apiKey
             hotKey = model.settings.hotKey
             language = model.settings.language
-            secondaryLanguage = model.settings.secondaryLanguage
             transcriptionModel = model.settings.transcriptionModel
             postProcessingEnabled = model.settings.postProcessingEnabled
             postProcessingModel = model.settings.postProcessingModel
@@ -420,17 +429,10 @@ struct SettingsView: View {
 
         SettingsCard {
             VStack(alignment: .leading, spacing: 10) {
-                SettingsCardHeader(title: "Language", subtitle: "Primary and optional secondary language")
-                Picker("Primary Language", selection: $language) {
+                SettingsCardHeader(title: "Language", subtitle: "Select your dictation language")
+                Picker("Language", selection: $language) {
                     ForEach(LanguageOption.allCases, id: \.self) { option in
                         Text(option.displayName).tag(option)
-                    }
-                }
-
-                Picker("Secondary Language (Optional)", selection: $secondaryLanguage) {
-                    Text("None").tag(nil as LanguageOption?)
-                    ForEach(LanguageOption.allCases, id: \.self) { option in
-                        Text(option.displayName).tag(option as LanguageOption?)
                     }
                 }
             }
