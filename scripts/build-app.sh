@@ -71,9 +71,9 @@ cat > "$PLIST_PATH" <<'EOF'
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>2.2.0</string>
+  <string>2.3.0</string>
   <key>CFBundleVersion</key>
-  <string>4</string>
+  <string>5</string>
   <key>LSMinimumSystemVersion</key>
   <string>13.0</string>
   <key>LSUIElement</key>

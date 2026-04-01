@@ -14,9 +14,15 @@ struct MenuBarContentView: View {
                         .foregroundStyle(.red)
                     Text("Recording...")
                     Spacer()
-                    Text("Release \(model.settings.hotKey.displayString) to stop")
-                        .foregroundStyle(.secondary)
-                        .font(.caption)
+                    if model.settings.recordingMode == .pushToTalk {
+                        Text("Release \(model.settings.hotKey.displayString) to stop")
+                            .foregroundStyle(.secondary)
+                            .font(.caption)
+                    } else {
+                        Text("Press \(model.settings.hotKey.displayString) or esc to stop")
+                            .foregroundStyle(.secondary)
+                            .font(.caption)
+                    }
                 }
             } else if model.isTranscribing {
                 HStack {
@@ -27,7 +33,11 @@ struct MenuBarContentView: View {
                 }
             } else {
                 HStack {
-                    Text("Hold \(model.settings.hotKey.displayString) to dictate")
+                    if model.settings.recordingMode == .pushToTalk {
+                        Text("Hold \(model.settings.hotKey.displayString) to dictate")
+                    } else {
+                        Text("Press \(model.settings.hotKey.displayString) to dictate")
+                    }
                     Spacer()
                 }
             }
@@ -60,6 +70,13 @@ struct MenuBarContentView: View {
             Toggle("Post-Processing", isOn: Binding(
                 get: { model.settings.postProcessingEnabled },
                 set: { _ in model.togglePostProcessing() }
+            ))
+            .toggleStyle(.switch)
+            .controlSize(.small)
+
+            Toggle("Handsfree Mode", isOn: Binding(
+                get: { model.settings.recordingMode == .handsfree },
+                set: { _ in model.toggleRecordingMode() }
             ))
             .toggleStyle(.switch)
             .controlSize(.small)
@@ -165,6 +182,8 @@ struct SettingsView: View {
     @State private var postProcessingSystemPrompt: String = ""
     @State private var useGemini: Bool = false
     @State private var geminiApiKey: String = ""
+    @State private var recordingMode: RecordingMode = .pushToTalk
+    @State private var handsfreeMaxMinutes: Int = 5
 
     private var allPermissionsGranted: Bool {
         model.hasMicrophonePermission && model.hasAccessibilityPermission && model.hasInputMonitoringPermission
@@ -282,7 +301,9 @@ struct SettingsView: View {
                                 postProcessingModel: postProcessingModel,
                                 postProcessingSystemPrompt: postProcessingSystemPrompt,
                                 useGemini: useGemini,
-                                geminiApiKey: geminiApiKey
+                                geminiApiKey: geminiApiKey,
+                                recordingMode: recordingMode,
+                                handsfreeMaxMinutes: handsfreeMaxMinutes
                             ) { _ in }
                         }
                         .disabled(model.isValidatingKey)
@@ -296,7 +317,9 @@ struct SettingsView: View {
                                 postProcessingModel: postProcessingModel,
                                 postProcessingSystemPrompt: postProcessingSystemPrompt,
                                 useGemini: useGemini,
-                                geminiApiKey: geminiApiKey
+                                geminiApiKey: geminiApiKey,
+                                recordingMode: recordingMode,
+                                handsfreeMaxMinutes: handsfreeMaxMinutes
                             ) { success in
                                 if success {
                                     model.dismissSettingsWindow()
@@ -329,6 +352,8 @@ struct SettingsView: View {
                 : model.settings.postProcessingSystemPrompt
             useGemini = model.settings.useGemini
             geminiApiKey = model.settings.geminiApiKey
+            recordingMode = model.settings.recordingMode
+            handsfreeMaxMinutes = model.settings.handsfreeMaxMinutes
             model.errorMessage = nil
             model.refreshPermissions()
         }
@@ -356,7 +381,7 @@ struct SettingsView: View {
 
         SettingsCard {
             VStack(alignment: .leading, spacing: 10) {
-                SettingsCardHeader(title: "Shortcut", subtitle: "Hold to dictate, release to insert text")
+                SettingsCardHeader(title: "Shortcut", subtitle: recordingMode == .pushToTalk ? "Hold to dictate, release to insert text" : "Press to start/stop recording")
                 HotKeyRecorderField(hotKey: $hotKey)
                 Text("Suggested hotkeys: fn, ⌃⌥, ⌥⌘")
                     .font(.caption)
@@ -371,6 +396,33 @@ struct SettingsView: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     .padding(.top, 2)
+                }
+            }
+        }
+
+        SettingsCard {
+            VStack(alignment: .leading, spacing: 10) {
+                SettingsCardHeader(title: "Recording Mode", subtitle: "How the shortcut triggers recording")
+                Picker("Mode", selection: $recordingMode) {
+                    ForEach(RecordingMode.allCases, id: \.self) { mode in
+                        Text(mode.displayName).tag(mode)
+                    }
+                }
+                .pickerStyle(.radioGroup)
+                .labelsHidden()
+
+                if recordingMode == .handsfree {
+                    HStack {
+                        Text("Auto-stop after")
+                        TextField("", value: $handsfreeMaxMinutes, format: .number)
+                            .frame(width: 50)
+                            .multilineTextAlignment(.center)
+                        Text("minutes")
+                    }
+                    .font(.callout)
+                    Text("Recording stops automatically after this duration, or press the shortcut / Esc to stop early.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
         }

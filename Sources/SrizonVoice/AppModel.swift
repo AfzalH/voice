@@ -23,6 +23,7 @@ final class AppModel: ObservableObject {
     private lazy var settingsWindowManager = SettingsWindowManager(model: self)
     private var errorDismissTask: Task<Void, Never>?
     private var permissionPollTask: Task<Void, Never>?
+    private var handsfreeAutoStopTask: Task<Void, Never>?
 
     init() {
         settings.load()
@@ -100,6 +101,12 @@ final class AppModel: ObservableObject {
         saveSettings()
     }
 
+    func toggleRecordingMode() {
+        objectWillChange.send()
+        settings.recordingMode = settings.recordingMode == .pushToTalk ? .handsfree : .pushToTalk
+        saveSettings()
+    }
+
     @Published var hasMicrophonePermission = false
     @Published var hasAccessibilityPermission = false
     @Published var hasInputMonitoringPermission = false
@@ -148,6 +155,8 @@ final class AppModel: ObservableObject {
         postProcessingSystemPrompt: String = "",
         useGemini: Bool = false,
         geminiApiKey: String = "",
+        recordingMode: RecordingMode = .pushToTalk,
+        handsfreeMaxMinutes: Int = 5,
         completion: @escaping (Bool) -> Void
     ) {
         let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -198,6 +207,8 @@ final class AppModel: ObservableObject {
                 : postProcessingSystemPrompt
             settings.useGemini = useGemini
             settings.geminiApiKey = trimmedGeminiKey
+            settings.recordingMode = recordingMode
+            settings.handsfreeMaxMinutes = max(1, handsfreeMaxMinutes)
             saveSettings()
             errorMessage = nil
             completion(true)
@@ -239,6 +250,7 @@ final class AppModel: ObservableObject {
 
     private func stopDictation() {
         guard isDictating else { return }
+        cancelHandsfreeAutoStop()
         isDictating = false
         isTranscribing = true
         recordingIslandController.showTranscribing()
@@ -286,32 +298,68 @@ final class AppModel: ObservableObject {
             }
         }
 
-        // Hotkey press-and-hold: press starts, release stops
         hotKeyMonitor.onKeyDown = { [weak self] in
             Task { @MainActor in
-                guard let self, !self.isDictating, !self.isTranscribing else { return }
-                self.startDictation()
+                guard let self else { return }
+                if self.settings.recordingMode == .pushToTalk {
+                    // Push-to-talk: press starts
+                    guard !self.isDictating, !self.isTranscribing else { return }
+                    self.startDictation()
+                } else {
+                    // Handsfree: toggle on/off
+                    if self.isDictating {
+                        self.stopDictation()
+                    } else if !self.isTranscribing {
+                        self.startDictation()
+                        self.startHandsfreeAutoStop()
+                    }
+                }
             }
         }
         hotKeyMonitor.onKeyUp = { [weak self] in
             Task { @MainActor in
-                self?.stopDictation()
+                guard let self else { return }
+                if self.settings.recordingMode == .pushToTalk {
+                    self.stopDictation()
+                }
+                // Handsfree: ignore key up
             }
         }
     }
 
     private func bindStopControls() {
-        // Escape cancels recording without transcribing
         escapeKeyMonitor.onEscapePressed = { [weak self] in
             Task { @MainActor in
                 guard let self, self.isDictating else { return }
-                self.dictationCoordinator.cancelRecording()
-                self.isDictating = false
-                self.recordingIslandController.hide()
-                NSSound(named: "Pop")?.play()
+                if self.settings.recordingMode == .handsfree {
+                    // In handsfree mode, Escape stops and transcribes
+                    self.cancelHandsfreeAutoStop()
+                    self.stopDictation()
+                } else {
+                    // In push-to-talk mode, Escape cancels without transcribing
+                    self.dictationCoordinator.cancelRecording()
+                    self.isDictating = false
+                    self.recordingIslandController.hide()
+                    NSSound(named: "Pop")?.play()
+                }
             }
         }
         escapeKeyMonitor.start()
+    }
+
+    private func startHandsfreeAutoStop() {
+        cancelHandsfreeAutoStop()
+        let maxSeconds = UInt64(settings.handsfreeMaxMinutes) * 60
+        handsfreeAutoStopTask = Task {
+            try? await Task.sleep(nanoseconds: maxSeconds * 1_000_000_000)
+            guard !Task.isCancelled, self.isDictating else { return }
+            self.stopDictation()
+        }
+    }
+
+    private func cancelHandsfreeAutoStop() {
+        handsfreeAutoStopTask?.cancel()
+        handsfreeAutoStopTask = nil
     }
 
     func refreshPermissions() {
