@@ -267,7 +267,9 @@ final class SettingsWindowManager: NSObject, NSWindowDelegate {
         // updateWindowContentSizeExtremaIfNecessary → setNeedsUpdateConstraints
         // while AppKit is already inside an update-constraints pass, crashing
         // in _postWindowNeedsUpdateConstraints.
-        hosting.sizingOptions = .intrinsicContentSize
+        if #available(macOS 13.0, *) {
+            hosting.sizingOptions = .intrinsicContentSize
+        }
         let newWindow = NSWindow(contentViewController: hosting)
         newWindow.title = "SrizonVoice Settings"
         newWindow.styleMask = [.titled, .closable, .miniaturizable, .resizable]

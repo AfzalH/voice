@@ -110,16 +110,12 @@ final class DictationCoordinator {
     private let settings: UserSettings
     private let insertionService: TextInsertionService
     private let audioCapture = AudioCaptureService()
-    private let groqClient = GroqTranscriptionClient()
-    private let llmClient = LLMClient()
+    private let transcriptionClient = GeminiTranscriptionClient()
     private var isRunning = false
 
     /// Accumulated audio data from the recording session.
     private var audioBuffer = Data()
     private let bufferQueue = DispatchQueue(label: "voice.audio.buffer")
-
-    /// The app that was frontmost when recording started (i.e. the user's target app).
-    private var targetAppName: String = "Unknown App"
 
     init(settings: UserSettings, insertionService: TextInsertionService) {
         self.settings = settings
@@ -129,7 +125,6 @@ final class DictationCoordinator {
     func startRecording() throws {
         guard !isRunning else { return }
         bufferQueue.sync { audioBuffer = Data() }
-        targetAppName = NSWorkspace.shared.frontmostApplication?.localizedName ?? "Unknown App"
 
         try audioCapture.startCapture { [weak self] data in
             self?.bufferQueue.sync {
@@ -172,26 +167,14 @@ final class DictationCoordinator {
         onTranscribing?(true)
 
         do {
-            var transcript = try await groqClient.transcribe(
+            let transcript = try await transcriptionClient.transcribe(
                 apiKey: settings.apiKey,
                 audioData: wavData,
-                model: settings.transcriptionModel,
-                language: settings.language.code
+                outputMode: settings.outputMode,
+                customPrompt: settings.customPrompt,
+                targetLanguage: settings.translationLanguage,
+                targetAppName: targetAppName
             )
-
-            // Apply LLM post-processing if enabled
-            if settings.postProcessingEnabled {
-                let processedText = try await llmClient.postProcess(
-                    apiKey: settings.apiKey,
-                    transcript: transcript,
-                    model: settings.postProcessingModel,
-                    systemPrompt: settings.postProcessingSystemPrompt,
-                    targetAppName: targetAppName,
-                    useGemini: settings.useGemini,
-                    geminiApiKey: settings.geminiApiKey
-                )
-                transcript = processedText
-            }
 
             onTranscribing?(false)
 
@@ -322,56 +305,65 @@ final class AudioCaptureService {
     }
 }
 
-// MARK: - GroqTranscriptionClient
+// MARK: - GeminiTranscriptionClient
 
-final class GroqTranscriptionClient {
+final class GeminiTranscriptionClient {
+    private struct UploadedFile {
+        let uri: String
+        let mimeType: String
+    }
+
+    private static let model = "gemini-3.1-flash-lite"
+    private static let inlineAudioLimitBytes = 14 * 1024 * 1024
+
     private let session = URLSession(configuration: .default)
-    private let endpoint = "https://api.groq.com/openai/v1/audio/transcriptions"
 
-    /// Sends audio to Groq's Whisper API and returns the transcript.
+    /// Sends audio to Gemini and returns the final dictation text.
     func transcribe(
         apiKey: String,
         audioData: Data,
-        model: TranscriptionModel,
-        language: String
+        outputMode: TranscriptionOutputMode,
+        customPrompt: String,
+        targetLanguage: LanguageOption,
+        targetAppName: String
     ) async throws -> String {
-        guard let url = URL(string: endpoint) else { throw DictationError.invalidURL }
-
-        let boundary = UUID().uuidString
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-        request.httpBody = buildMultipartBody(
-            boundary: boundary,
-            audioData: audioData,
-            model: model.rawValue,
-            language: language
+        let prompt = buildPrompt(
+            outputMode: outputMode,
+            customPrompt: customPrompt,
+            targetLanguage: targetLanguage,
+            targetAppName: targetAppName
         )
 
-        let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse else { throw DictationError.invalidResponse }
-        if http.statusCode == 401 || http.statusCode == 403 { throw DictationError.invalidAPIKey }
-        guard (200...299).contains(http.statusCode),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let text = json["text"] as? String
-        else {
-            let body = String(data: data, encoding: .utf8) ?? ""
-            throw DictationError.serverError(body.isEmpty ? "Transcription failed." : body)
+        if audioData.count <= Self.inlineAudioLimitBytes {
+            let audioPart: [String: Any] = [
+                "inline_data": [
+                    "mime_type": "audio/wav",
+                    "data": audioData.base64EncodedString()
+                ]
+            ]
+            return try await generateContent(apiKey: apiKey, prompt: prompt, audioPart: audioPart)
         }
-        return text
+
+        let uploadedFile = try await uploadAudio(apiKey: apiKey, audioData: audioData)
+        let audioPart: [String: Any] = [
+            "file_data": [
+                "mime_type": uploadedFile.mimeType,
+                "file_uri": uploadedFile.uri
+            ]
+        ]
+        return try await generateContent(apiKey: apiKey, prompt: prompt, audioPart: audioPart)
     }
 
-    /// Validates a Groq API key by hitting the models list endpoint.
+    /// Validates a Gemini API key by listing available models.
     static func validateAPIKey(_ apiKey: String) async -> Bool {
-        guard let url = URL(string: "https://api.groq.com/openai/v1/models") else { return false }
+        guard let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models") else { return false }
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
-        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue(apiKey, forHTTPHeaderField: "x-goog-api-key")
         do {
             let (_, response) = try await URLSession.shared.data(for: request)
             guard let http = response as? HTTPURLResponse else { return false }
-            return http.statusCode != 401 && http.statusCode != 403
+            return (200...299).contains(http.statusCode)
         } catch {
             return false
         }
@@ -379,144 +371,32 @@ final class GroqTranscriptionClient {
 
     // MARK: - Private
 
-    private func buildMultipartBody(
-        boundary: String,
-        audioData: Data,
-        model: String,
-        language: String
-    ) -> Data {
-        var body = Data()
-
-        func field(_ name: String, _ value: String) {
-            body.append(contentsOf: "--\(boundary)\r\n".utf8)
-            body.append(contentsOf: "Content-Disposition: form-data; name=\"\(name)\"\r\n\r\n".utf8)
-            body.append(contentsOf: "\(value)\r\n".utf8)
-        }
-
-        // Audio file
-        body.append(contentsOf: "--\(boundary)\r\n".utf8)
-        body.append(contentsOf: "Content-Disposition: form-data; name=\"file\"; filename=\"recording.wav\"\r\n".utf8)
-        body.append(contentsOf: "Content-Type: audio/wav\r\n\r\n".utf8)
-        body.append(audioData)
-        body.append(contentsOf: "\r\n".utf8)
-
-        field("model", model)
-        field("language", language)
-        field("response_format", "json")
-
-        body.append(contentsOf: "--\(boundary)--\r\n".utf8)
-        return body
-    }
-}
-
-// MARK: - LLMClient
-
-final class LLMClient {
-    private let session = URLSession(configuration: .default)
-    private let groqEndpoint = "https://api.groq.com/openai/v1/chat/completions"
-
-    /// Sends the transcript to the configured LLM API for post-processing.
-    func postProcess(
+    private func generateContent(
         apiKey: String,
-        transcript: String,
-        model: PostProcessingModel,
-        systemPrompt: String,
-        targetAppName: String,
-        useGemini: Bool = false,
-        geminiApiKey: String = ""
+        prompt: String,
+        audioPart: [String: Any]
     ) async throws -> String {
-        if useGemini {
-            return try await postProcessWithGemini(
-                apiKey: geminiApiKey,
-                transcript: transcript,
-                systemPrompt: systemPrompt,
-                targetAppName: targetAppName
-            )
+        guard let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(Self.model):generateContent") else {
+            throw DictationError.invalidURL
         }
-        return try await postProcessWithGroq(
-            apiKey: apiKey,
-            transcript: transcript,
-            model: model,
-            systemPrompt: systemPrompt,
-            targetAppName: targetAppName
-        )
-    }
-
-    private func postProcessWithGroq(
-        apiKey: String,
-        transcript: String,
-        model: PostProcessingModel,
-        systemPrompt: String,
-        targetAppName: String
-    ) async throws -> String {
-        guard let url = URL(string: groqEndpoint) else { throw DictationError.invalidURL }
-
-        // Append target app context to the system prompt
-        let appContext = " Note: The dictation was triggered in the context of: \(targetAppName)."
-        let enhancedPrompt = systemPrompt + appContext
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-
-        let messages: [[String: Any]] = [
-            ["role": "system", "content": enhancedPrompt],
-            ["role": "user", "content": transcript]
-        ]
-
-        let body: [String: Any] = [
-            "model": model.rawValue,
-            "messages": messages,
-            "temperature": 0.3
-        ]
-
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
-
-        let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse else { throw DictationError.invalidResponse }
-        if http.statusCode == 401 || http.statusCode == 403 { throw DictationError.invalidAPIKey }
-        guard (200...299).contains(http.statusCode),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let choices = json["choices"] as? [[String: Any]],
-              let firstChoice = choices.first,
-              let message = firstChoice["message"] as? [String: Any],
-              let content = message["content"] as? String
-        else {
-            let body = String(data: data, encoding: .utf8) ?? ""
-            throw DictationError.serverError(body.isEmpty ? "Post-processing failed." : body)
-        }
-        return content
-    }
-
-    private static let geminiModel = "gemini-3.1-flash-lite-preview"
-
-    private func postProcessWithGemini(
-        apiKey: String,
-        transcript: String,
-        systemPrompt: String,
-        targetAppName: String
-    ) async throws -> String {
-        let encodedKey = apiKey.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? apiKey
-        let endpoint = "https://generativelanguage.googleapis.com/v1beta/models/\(Self.geminiModel):generateContent?key=\(encodedKey)"
-        guard let url = URL(string: endpoint) else { throw DictationError.invalidURL }
-
-        let appContext = " Note: The dictation was triggered in the context of: \(targetAppName)."
-        let enhancedPrompt = systemPrompt + appContext
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
+        request.setValue(apiKey, forHTTPHeaderField: "x-goog-api-key")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
         let body: [String: Any] = [
-            "system_instruction": [
-                "parts": [["text": enhancedPrompt]]
-            ],
             "contents": [
-                ["role": "user", "parts": [["text": transcript]]]
+                [
+                    "role": "user",
+                    "parts": [
+                        audioPart,
+                        ["text": prompt]
+                    ]
+                ]
             ],
-            "generationConfig": [
-                "temperature": 0.3
+            "generation_config": [
+                "temperature": 0
             ]
         ]
 
@@ -524,39 +404,115 @@ final class LLMClient {
 
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw DictationError.invalidResponse }
-        if http.statusCode == 400 || http.statusCode == 401 || http.statusCode == 403 {
-            let body = String(data: data, encoding: .utf8) ?? ""
-            if body.contains("API_KEY_INVALID") || body.contains("PERMISSION_DENIED") {
-                throw DictationError.invalidAPIKey
-            }
-            throw DictationError.serverError(body.isEmpty ? "Gemini post-processing failed." : body)
-        }
-        guard (200...299).contains(http.statusCode),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+        try handleGeminiErrorIfNeeded(statusCode: http.statusCode, data: data)
+
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let candidates = json["candidates"] as? [[String: Any]],
               let firstCandidate = candidates.first,
               let content = firstCandidate["content"] as? [String: Any],
               let parts = content["parts"] as? [[String: Any]],
-              let text = parts.first?["text"] as? String
+              let text = parts.compactMap({ $0["text"] as? String }).first
         else {
             let body = String(data: data, encoding: .utf8) ?? ""
-            throw DictationError.serverError(body.isEmpty ? "Gemini post-processing failed." : body)
+            throw DictationError.serverError(body.isEmpty ? "Transcription failed." : body)
         }
+
         return text
     }
 
-    /// Validates a Gemini API key by listing models.
-    static func validateGeminiAPIKey(_ apiKey: String) async -> Bool {
-        let encodedKey = apiKey.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? apiKey
-        guard let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models?key=\(encodedKey)") else { return false }
-        var request = URLRequest(url: url)
-        request.httpMethod = "GET"
-        do {
-            let (_, response) = try await URLSession.shared.data(for: request)
-            guard let http = response as? HTTPURLResponse else { return false }
-            return (200...299).contains(http.statusCode)
-        } catch {
-            return false
+    private func uploadAudio(apiKey: String, audioData: Data) async throws -> UploadedFile {
+        guard let startURL = URL(string: "https://generativelanguage.googleapis.com/upload/v1beta/files") else {
+            throw DictationError.invalidURL
+        }
+
+        var startRequest = URLRequest(url: startURL)
+        startRequest.httpMethod = "POST"
+        startRequest.setValue(apiKey, forHTTPHeaderField: "x-goog-api-key")
+        startRequest.setValue("resumable", forHTTPHeaderField: "X-Goog-Upload-Protocol")
+        startRequest.setValue("start", forHTTPHeaderField: "X-Goog-Upload-Command")
+        startRequest.setValue("\(audioData.count)", forHTTPHeaderField: "X-Goog-Upload-Header-Content-Length")
+        startRequest.setValue("audio/wav", forHTTPHeaderField: "X-Goog-Upload-Header-Content-Type")
+        startRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        startRequest.httpBody = try JSONSerialization.data(withJSONObject: [
+            "file": ["display_name": "SrizonVoice recording"]
+        ])
+
+        let (startData, startResponse) = try await session.data(for: startRequest)
+        guard let startHTTP = startResponse as? HTTPURLResponse else { throw DictationError.invalidResponse }
+        try handleGeminiErrorIfNeeded(statusCode: startHTTP.statusCode, data: startData)
+
+        guard let uploadURLString = uploadURL(from: startHTTP),
+              let uploadURL = URL(string: uploadURLString)
+        else {
+            throw DictationError.serverError("Gemini did not return an upload URL.")
+        }
+
+        var uploadRequest = URLRequest(url: uploadURL)
+        uploadRequest.httpMethod = "POST"
+        uploadRequest.setValue("\(audioData.count)", forHTTPHeaderField: "Content-Length")
+        uploadRequest.setValue("0", forHTTPHeaderField: "X-Goog-Upload-Offset")
+        uploadRequest.setValue("upload, finalize", forHTTPHeaderField: "X-Goog-Upload-Command")
+        uploadRequest.httpBody = audioData
+
+        let (uploadData, uploadResponse) = try await session.data(for: uploadRequest)
+        guard let uploadHTTP = uploadResponse as? HTTPURLResponse else { throw DictationError.invalidResponse }
+        try handleGeminiErrorIfNeeded(statusCode: uploadHTTP.statusCode, data: uploadData)
+
+        guard let json = try? JSONSerialization.jsonObject(with: uploadData) as? [String: Any],
+              let file = json["file"] as? [String: Any],
+              let uri = file["uri"] as? String
+        else {
+            let body = String(data: uploadData, encoding: .utf8) ?? ""
+            throw DictationError.serverError(body.isEmpty ? "Gemini file upload failed." : body)
+        }
+
+        let mimeType = (file["mimeType"] as? String) ?? (file["mime_type"] as? String) ?? "audio/wav"
+        return UploadedFile(uri: uri, mimeType: mimeType)
+    }
+
+    private func uploadURL(from response: HTTPURLResponse) -> String? {
+        for (key, value) in response.allHeaderFields {
+            guard "\(key)".caseInsensitiveCompare("x-goog-upload-url") == .orderedSame else { continue }
+            return value as? String
+        }
+        return nil
+    }
+
+    private func handleGeminiErrorIfNeeded(statusCode: Int, data: Data) throws {
+        guard !(200...299).contains(statusCode) else { return }
+        let body = String(data: data, encoding: .utf8) ?? ""
+        if statusCode == 400 || statusCode == 401 || statusCode == 403,
+           body.contains("API_KEY_INVALID") || body.contains("PERMISSION_DENIED")
+        {
+            throw DictationError.invalidAPIKey
+        }
+        throw DictationError.serverError(body.isEmpty ? "Gemini transcription failed." : body)
+    }
+
+    private func buildPrompt(
+        outputMode: TranscriptionOutputMode,
+        customPrompt: String,
+        targetLanguage: LanguageOption,
+        targetAppName: String
+    ) -> String {
+        let base = """
+        You are transcribing dictation audio for insertion into \(targetAppName).
+        Return only the final text. Do not include labels, Markdown, timestamps, explanations, or surrounding quotes.
+        Do not answer questions in the audio; transcribe or transform the dictated words only.
+        """
+
+        switch outputMode {
+        case .asIs:
+            return base + "\nTranscribe the speech as-is. Preserve wording, filler words, casing, and punctuation as closely as possible. Do not correct grammar and do not translate."
+        case .corrected:
+            return base + "\n" + TranscriptionOutputMode.defaultCustomPrompt
+        case .customPrompt:
+            let trimmed = customPrompt.trimmingCharacters(in: .whitespacesAndNewlines)
+            return base + "\n" + (trimmed.isEmpty ? TranscriptionOutputMode.defaultCustomPrompt : trimmed)
+        case .translated:
+            return base + "\nTranscribe the speech, then output only the translation in \(targetLanguage.plainName) (\(targetLanguage.code))."
+        case .originalAndTranslation:
+            return base + "\nTranscribe the speech and translate it to \(targetLanguage.plainName) (\(targetLanguage.code)). Output each utterance as: original - translation. Use one line per utterance and use a plain hyphen separator."
         }
     }
 }

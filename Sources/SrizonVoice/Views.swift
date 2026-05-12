@@ -42,37 +42,25 @@ struct MenuBarContentView: View {
                 }
             }
 
-            Picker("Language", selection: Binding(
-                get: { model.settings.language },
-                set: { model.switchLanguage($0) }
+            Picker("Output", selection: Binding(
+                get: { model.settings.outputMode },
+                set: { model.switchOutputMode($0) }
             )) {
-                ForEach(LanguageOption.allCases, id: \.self) { language in
-                    Text(language.displayName).tag(language)
+                ForEach(TranscriptionOutputMode.allCases, id: \.self) { mode in
+                    Text(mode.displayName).tag(mode)
                 }
             }
 
-            if !model.settings.recentLanguages.isEmpty {
-                HStack(spacing: 6) {
-                    Text("Recent:")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    ForEach(model.settings.recentLanguages.filter { $0 != model.settings.language }, id: \.self) { lang in
-                        Button(action: { model.switchLanguage(lang) }) {
-                            Text(lang.displayName)
-                                .font(.caption)
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
+            if model.settings.outputMode.requiresTargetLanguage {
+                Picker("Translate to", selection: Binding(
+                    get: { model.settings.translationLanguage },
+                    set: { model.switchTranslationLanguage($0) }
+                )) {
+                    ForEach(LanguageOption.allCases, id: \.self) { language in
+                        Text(language.displayName).tag(language)
                     }
                 }
             }
-
-            Toggle("Post-Processing", isOn: Binding(
-                get: { model.settings.postProcessingEnabled },
-                set: { _ in model.togglePostProcessing() }
-            ))
-            .toggleStyle(.switch)
-            .controlSize(.small)
 
             Toggle("Handsfree Mode", isOn: Binding(
                 get: { model.settings.recordingMode == .handsfree },
@@ -108,7 +96,6 @@ struct MenuBarContentView: View {
 private enum SettingsTab: String, CaseIterable, Identifiable {
     case general
     case transcription
-    case postProcessing
 
     var id: String { rawValue }
 
@@ -116,7 +103,6 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         switch self {
         case .general:        return "General"
         case .transcription:  return "Transcription"
-        case .postProcessing: return "Post-Processing"
         }
     }
 
@@ -124,7 +110,6 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         switch self {
         case .general:        return "gearshape"
         case .transcription:  return "waveform"
-        case .postProcessing: return "sparkles"
         }
     }
 }
@@ -175,15 +160,11 @@ struct SettingsView: View {
     @State private var selectedTab: SettingsTab = .general
     @State private var apiKey: String = ""
     @State private var hotKey = HotKey.defaultValue
-    @State private var language = LanguageOption.english
-    @State private var transcriptionModel = TranscriptionModel.whisperTurbo
-    @State private var postProcessingEnabled: Bool = true
-    @State private var postProcessingModel: PostProcessingModel = .gptOss120b
-    @State private var postProcessingSystemPrompt: String = ""
-    @State private var useGemini: Bool = false
-    @State private var geminiApiKey: String = ""
-    @State private var recordingMode: RecordingMode = .pushToTalk
-    @State private var handsfreeMaxMinutes: Int = 5
+    @State private var outputMode = TranscriptionOutputMode.corrected
+    @State private var customPrompt = TranscriptionOutputMode.defaultCustomPrompt
+    @State private var translationLanguage = LanguageOption.english
+    @State private var recordingMode: RecordingMode = .handsfree
+    @State private var handsfreeMaxSeconds: Double = Double(UserSettings.defaultHandsfreeSeconds)
 
     private var allPermissionsGranted: Bool {
         model.hasMicrophonePermission && model.hasAccessibilityPermission && model.hasInputMonitoringPermission
@@ -212,9 +193,8 @@ struct SettingsView: View {
             // Sidebar
             VStack(alignment: .leading, spacing: 4) {
                 Text("SETTINGS")
-                    .font(.caption)
+                    .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
-                    .fontWeight(.semibold)
                     .padding(.horizontal, 12)
                     .padding(.top, 12)
                     .padding(.bottom, 4)
@@ -257,8 +237,6 @@ struct SettingsView: View {
                             generalPanel
                         case .transcription:
                             transcriptionPanel
-                        case .postProcessing:
-                            postProcessingPanel
                         }
                     }
                     .padding(24)
@@ -295,15 +273,11 @@ struct SettingsView: View {
                             model.validateAndSaveAPIKey(
                                 apiKey,
                                 hotKey: hotKey,
-                                language: language,
-                                transcriptionModel: transcriptionModel,
-                                postProcessingEnabled: postProcessingEnabled,
-                                postProcessingModel: postProcessingModel,
-                                postProcessingSystemPrompt: postProcessingSystemPrompt,
-                                useGemini: useGemini,
-                                geminiApiKey: geminiApiKey,
+                                outputMode: outputMode,
+                                customPrompt: customPrompt,
+                                translationLanguage: translationLanguage,
                                 recordingMode: recordingMode,
-                                handsfreeMaxMinutes: handsfreeMaxMinutes
+                                handsfreeMaxSeconds: Int(handsfreeMaxSeconds)
                             ) { _ in }
                         }
                         .disabled(model.isValidatingKey)
@@ -311,15 +285,11 @@ struct SettingsView: View {
                             model.validateAndSaveAPIKey(
                                 apiKey,
                                 hotKey: hotKey,
-                                language: language,
-                                transcriptionModel: transcriptionModel,
-                                postProcessingEnabled: postProcessingEnabled,
-                                postProcessingModel: postProcessingModel,
-                                postProcessingSystemPrompt: postProcessingSystemPrompt,
-                                useGemini: useGemini,
-                                geminiApiKey: geminiApiKey,
+                                outputMode: outputMode,
+                                customPrompt: customPrompt,
+                                translationLanguage: translationLanguage,
                                 recordingMode: recordingMode,
-                                handsfreeMaxMinutes: handsfreeMaxMinutes
+                                handsfreeMaxSeconds: Int(handsfreeMaxSeconds)
                             ) { success in
                                 if success {
                                     model.dismissSettingsWindow()
@@ -343,17 +313,11 @@ struct SettingsView: View {
         .onAppear {
             apiKey = model.settings.apiKey
             hotKey = model.settings.hotKey
-            language = model.settings.language
-            transcriptionModel = model.settings.transcriptionModel
-            postProcessingEnabled = model.settings.postProcessingEnabled
-            postProcessingModel = model.settings.postProcessingModel
-            postProcessingSystemPrompt = model.settings.postProcessingSystemPrompt.isEmpty
-                ? UserSettings.defaultSystemPrompt
-                : model.settings.postProcessingSystemPrompt
-            useGemini = model.settings.useGemini
-            geminiApiKey = model.settings.geminiApiKey
+            outputMode = model.settings.outputMode
+            customPrompt = model.settings.customPrompt
+            translationLanguage = model.settings.translationLanguage
             recordingMode = model.settings.recordingMode
-            handsfreeMaxMinutes = model.settings.handsfreeMaxMinutes
+            handsfreeMaxSeconds = Double(UserSettings.clampHandsfreeSeconds(model.settings.handsfreeMaxSeconds))
             model.errorMessage = nil
             model.refreshPermissions()
         }
@@ -365,8 +329,8 @@ struct SettingsView: View {
     private var generalPanel: some View {
         SettingsCard {
             VStack(alignment: .leading, spacing: 10) {
-                SettingsCardHeader(title: "API Key", subtitle: "Your Groq API key for transcription")
-                SecureField("Groq API Key", text: $apiKey)
+                SettingsCardHeader(title: "API Key", subtitle: "Your Gemini API key for transcription")
+                SecureField("Gemini API Key", text: $apiKey)
                     .overlay(
                         RoundedRectangle(cornerRadius: 4)
                             .stroke(Color.red, lineWidth: allPermissionsGranted && apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 1.5 : 0)
@@ -374,7 +338,7 @@ struct SettingsView: View {
                     .onChange(of: apiKey) { _ in
                         model.errorMessage = nil
                     }
-                Link("Get your key from console.groq.com", destination: URL(string: "https://console.groq.com/keys")!)
+                Link("Get your key from aistudio.google.com", destination: URL(string: "https://aistudio.google.com/apikey")!)
                     .font(.caption)
             }
         }
@@ -412,14 +376,17 @@ struct SettingsView: View {
                 .labelsHidden()
 
                 if recordingMode == .handsfree {
-                    HStack {
+                    HStack(alignment: .firstTextBaseline) {
                         Text("Auto-stop after")
-                        TextField("", value: $handsfreeMaxMinutes, format: .number)
-                            .frame(width: 50)
-                            .multilineTextAlignment(.center)
-                        Text("minutes")
+                        Text(Self.handsfreeDurationLabel(Int(handsfreeMaxSeconds)))
+                            .fontWeight(.semibold)
                     }
                     .font(.callout)
+                    Slider(
+                        value: $handsfreeMaxSeconds,
+                        in: Double(UserSettings.minHandsfreeSeconds)...Double(UserSettings.maxHandsfreeSeconds),
+                        step: 30
+                    )
                     Text("Recording stops automatically after this duration, or press the shortcut / Esc to stop early.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -462,94 +429,60 @@ struct SettingsView: View {
         NSApp.terminate(nil)
     }
 
+    private static func handsfreeDurationLabel(_ seconds: Int) -> String {
+        let clampedSeconds = UserSettings.clampHandsfreeSeconds(seconds)
+        if clampedSeconds < 60 {
+            return "\(clampedSeconds) seconds"
+        }
+        let minutes = clampedSeconds / 60
+        let remainingSeconds = clampedSeconds % 60
+        if remainingSeconds == 0 {
+            return minutes == 1 ? "1 minute" : "\(minutes) minutes"
+        }
+        return "\(minutes)m \(remainingSeconds)s"
+    }
+
     // MARK: - Transcription Panel
 
     @ViewBuilder
     private var transcriptionPanel: some View {
         SettingsCard {
             VStack(alignment: .leading, spacing: 10) {
-                SettingsCardHeader(title: "Model", subtitle: "Choose the transcription model")
-                Picker("Model", selection: $transcriptionModel) {
-                    ForEach(TranscriptionModel.allCases, id: \.self) { m in
-                        Text(m.displayName).tag(m)
+                SettingsCardHeader(title: "Output", subtitle: "Choose how Gemini returns dictation")
+                Picker("Output", selection: $outputMode) {
+                    ForEach(TranscriptionOutputMode.allCases, id: \.self) { mode in
+                        Text(mode.displayName).tag(mode)
                     }
                 }
                 .pickerStyle(.radioGroup)
                 .labelsHidden()
-            }
-        }
-
-        SettingsCard {
-            VStack(alignment: .leading, spacing: 10) {
-                SettingsCardHeader(title: "Language", subtitle: "Select your dictation language")
-                Picker("Language", selection: $language) {
-                    ForEach(LanguageOption.allCases, id: \.self) { option in
-                        Text(option.displayName).tag(option)
+                .onChange(of: outputMode) { mode in
+                    if mode == .customPrompt,
+                       customPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    {
+                        customPrompt = TranscriptionOutputMode.defaultCustomPrompt
                     }
                 }
-            }
-        }
-    }
 
-    // MARK: - Post-Processing Panel
-
-    @ViewBuilder
-    private var postProcessingPanel: some View {
-        SettingsCard {
-            VStack(alignment: .leading, spacing: 10) {
-                SettingsCardHeader(title: "Post-Processing", subtitle: "Run transcriptions through an LLM")
-                Toggle("Enable Post-Processing", isOn: $postProcessingEnabled)
-
-                if postProcessingEnabled {
-                    Toggle("Use Gemini instead of Groq for post-processing", isOn: $useGemini)
-                }
-            }
-        }
-
-        if postProcessingEnabled {
-            if useGemini {
-                SettingsCard {
-                    VStack(alignment: .leading, spacing: 10) {
-                        SettingsCardHeader(title: "Gemini API Key", subtitle: "Required for Gemini post-processing (model: gemini-3.1-flash-lite-preview)")
-                        SecureField("Gemini API Key", text: $geminiApiKey)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 4)
-                                    .stroke(Color.red, lineWidth: geminiApiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 1.5 : 0)
-                            )
-                        Link("Get your key from aistudio.google.com", destination: URL(string: "https://aistudio.google.com/apikey")!)
-                            .font(.caption)
-                    }
-                }
-                .transition(.opacity)
-            } else {
-                SettingsCard {
-                    VStack(alignment: .leading, spacing: 10) {
-                        SettingsCardHeader(title: "Model", subtitle: "LLM model for post-processing")
-                        Picker("Model", selection: $postProcessingModel) {
-                            ForEach(PostProcessingModel.allCases, id: \.self) { m in
-                                Text(m.displayName).tag(m)
-                            }
-                        }
-                        .pickerStyle(.radioGroup)
-                        .labelsHidden()
-                    }
-                }
-                .transition(.opacity)
-            }
-
-            SettingsCard {
-                VStack(alignment: .leading, spacing: 10) {
-                    SettingsCardHeader(title: "System Prompt", subtitle: "Instructions for the LLM")
-                    TextEditor(text: $postProcessingSystemPrompt)
+                if outputMode == .customPrompt {
+                    Divider()
+                    SettingsCardHeader(title: "Custom Prompt", subtitle: "Used with the shared transcription guardrails above")
+                    TextEditor(text: $customPrompt)
                         .font(.system(.body, design: .monospaced))
-                        .frame(height: 120)
+                        .frame(minHeight: 120)
                         .overlay(
                             RoundedRectangle(cornerRadius: 4)
                                 .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
                         )
+                } else if outputMode.requiresTargetLanguage {
+                    Divider()
+                    Picker("Translate to", selection: $translationLanguage) {
+                        ForEach(LanguageOption.allCases, id: \.self) { option in
+                            Text(option.displayName).tag(option)
+                        }
+                    }
                 }
             }
-            .transition(.opacity)
         }
     }
 }

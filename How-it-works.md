@@ -1,6 +1,6 @@
 # How SrizonVoice Works
 
-SrizonVoice is a macOS menu bar app that lets you dictate text into any application by holding a hotkey while speaking. When you release the key, it transcribes your audio using Groq's Whisper API and inserts the text wherever your cursor is.
+SrizonVoice is a macOS menu bar app that lets you dictate text into any application by pressing a hotkey. Press once to record, press again to transcribe with Gemini and insert the text wherever your cursor is.
 
 ---
 
@@ -23,20 +23,21 @@ SrizonVoice is a macOS menu bar app that lets you dictate text into any applicat
 ## High-Level Flow
 
 ```
-User holds hotkey
+User presses hotkey
   → Audio capture starts (16kHz PCM, mic)
   → Floating recording island appears with live waveform
 
-User releases hotkey
+User presses hotkey again
   → Audio capture stops
   → PCM data wrapped into WAV file
-  → WAV uploaded to Groq Whisper API
-  → Transcript returned as plain text
+  → WAV sent to Gemini with the selected output prompt
+  → Final dictation text returned
   → Text inserted at cursor (via Accessibility API or clipboard paste)
   → Island disappears
 
 User presses Escape (while recording)
-  → Recording cancelled immediately, no transcription
+  → In handsfree mode, recording stops and transcribes
+  → In push-to-talk mode, recording is cancelled without transcription
 ```
 
 ---
@@ -98,7 +99,7 @@ A separate, always-on CGEvent tap listens for `keyDown` events with key code 53 
 
 ### Why CGEvent Taps Instead of NSEvent.addGlobalMonitorForEvents
 
-`NSEvent.addGlobalMonitorForEvents` requires the **Input Monitoring** permission — a separate TCC entitlement beyond Accessibility. CGEvent taps in listen-only mode work with just the **Accessibility** permission that the app already needs for text insertion. All event interception in this app uses listen-only CGEvent taps, so no events are suppressed or blocked.
+The app uses listen-only CGEvent taps for hotkey and Escape monitoring so events are observed without being suppressed or blocked. On current macOS versions, the app checks Input Monitoring before registering those global taps and asks the user to grant it during setup.
 
 ---
 
@@ -110,7 +111,7 @@ A separate, always-on CGEvent tap listens for `keyDown` events with key code 53 
 
 Uses `AVAudioEngine` to capture from the system microphone. The input node's native format (whatever the mic reports — typically 44.1kHz or 48kHz float32) is captured in 2048-frame chunks via an installed tap.
 
-Each chunk is converted to **16kHz, 16-bit, mono PCM** using `AVAudioConverter`. This is the format Whisper models expect and it keeps file sizes small. The conversion ratio is computed as `targetSampleRate / inputSampleRate`, with a small headroom (+32 frames) in the output buffer to account for rounding.
+Each chunk is converted to **16kHz, 16-bit, mono PCM** using `AVAudioConverter`. This keeps file sizes small before the audio is wrapped as WAV for Gemini. The conversion ratio is computed as `targetSampleRate / inputSampleRate`, with a small headroom (+32 frames) in the output buffer to account for rounding.
 
 Simultaneously, the RMS (root mean square) amplitude of each input chunk is computed:
 
@@ -143,43 +144,46 @@ All multi-byte integers are little-endian, matching the WAV specification.
 
 ## Transcription
 
-**Files:** `Services.swift` → `GroqTranscriptionClient`, `Models.swift` → `TranscriptionModel`
+**Files:** `Services.swift` → `GeminiTranscriptionClient`, `Models.swift` → `TranscriptionOutputMode`
 
-### GroqTranscriptionClient
+### GeminiTranscriptionClient
 
-Sends a single `POST` request to Groq's OpenAI-compatible transcription endpoint:
+Sends a `POST` request to Gemini's `generateContent` endpoint with the model `gemini-3.1-flash-lite`:
 
 ```
-POST https://api.groq.com/openai/v1/audio/transcriptions
-Authorization: Bearer {apiKey}
-Content-Type: multipart/form-data; boundary={uuid}
+POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent
+x-goog-api-key: {apiKey}
+Content-Type: application/json
 ```
 
-The multipart body contains four fields:
+For normal recordings, the WAV bytes are sent inline as base64 audio:
 
 | Field | Value |
 |---|---|
-| `file` | WAV binary, `filename="recording.wav"`, `Content-Type: audio/wav` |
-| `model` | `whisper-large-v3-turbo` or `whisper-large-v3` |
-| `language` | ISO 639-1 code (e.g. `"en"`) |
-| `response_format` | `"json"` |
+| `contents.parts[].inline_data.mime_type` | `audio/wav` |
+| `contents.parts[].inline_data.data` | Base64 WAV bytes |
+| `contents.parts[].text` | Prompt for the selected output mode |
+| `generation_config.temperature` | `0` |
 
-The response is `{"text": "transcribed words here"}`. The `text` field is extracted and returned.
+If the WAV is too large for an inline request, it is first uploaded through Gemini's resumable Files API and then referenced with `file_data` in the `generateContent` request.
 
-### Model Choice
+The response text is extracted from `candidates[].content.parts[].text` and inserted directly. There is no second cleanup request.
 
-Two Whisper models are offered:
+### Output Modes
 
-| Model | Speed | Accuracy | Cost |
-|---|---|---|---|
-| `whisper-large-v3-turbo` | Fast | Good | $0.04/hr |
-| `whisper-large-v3` | Slower | Higher | $0.111/hr |
+Gemini receives one prompt tailored to the selected mode:
 
-The turbo model is the default. The choice is saved to `UserDefaults` and selected via a radio group in Settings.
+| Mode | Behavior |
+|---|---|
+| As is | Transcribes without intentional correction or translation |
+| Correct things | Removes filler sounds, hesitation words, repetition, false starts, and mumbling artifacts, then returns grammatically corrected sentences |
+| Custom prompt | Uses the saved custom instruction from Settings, initially seeded with the Correct things prompt |
+| Translate to target language | Outputs only the target-language translation |
+| Original + target translation | Outputs `original - translation`, one utterance per line |
 
 ### API Key Validation
 
-When saving settings, the key is validated by making a `GET` request to `https://api.groq.com/openai/v1/models` with the provided key as a Bearer token. A 401 or 403 response means the key is invalid. Any other response means the key is accepted.
+When saving settings, the key is validated by making a `GET` request to `https://generativelanguage.googleapis.com/v1beta/models` with the provided key in the `x-goog-api-key` header. A 2xx response means the key is accepted.
 
 ---
 
@@ -248,17 +252,19 @@ A "Transcribing" label with an animated ellipsis (`.` → `..` → `...` → bla
 
 ## Settings & Persistence
 
-**File:** `Models.swift` → `UserSettings`, `HotKey`, `TranscriptionModel`
+**File:** `Models.swift` → `UserSettings`, `HotKey`, `TranscriptionOutputMode`
 
 All settings are stored in `UserDefaults.standard`:
 
 | Key | Type | Default |
 |---|---|---|
-| `groq.apiKey` | String | `""` |
+| `gemini.apiKey` | String | `""` |
 | `app.hotKey` | JSON-encoded `HotKey` | Fn key |
-| `dictation.language` | String (ISO code) | `"en"` |
-| `dictation.secondaryLanguage` | String (ISO code) | absent |
-| `groq.transcriptionModel` | String (model ID) | `"whisper-large-v3-turbo"` |
+| `dictation.outputMode` | String | `"corrected"` |
+| `dictation.customPrompt` | String | Correct things prompt |
+| `dictation.translationLanguage` | String (ISO code) | `"en"` |
+| `app.recordingMode` | String | `"handsfree"` |
+| `app.handsfreeMaxSeconds` | Int | `60` |
 
 `HotKey` is a `Codable` struct with `keyCode`, `modifiers`, and `isFnKey`. The custom `init(from:)` decodes `isFnKey` with `decodeIfPresent` defaulting to `false`, so older saved hotkeys without that field continue to work.
 
@@ -286,7 +292,7 @@ The settings shortcut field is an `NSButton` wrapped in `NSViewRepresentable`. C
 
 ## Permissions
 
-The app requires two permissions. Neither is optional — both are needed for normal operation.
+The app requires three permissions. None are optional for normal operation.
 
 ### Microphone
 
@@ -297,14 +303,13 @@ Declared via `NSMicrophoneUsageDescription` in Info.plist. Requested at the firs
 Declared via `NSAccessibilityUsageDescription`. Checked via `AXIsProcessTrusted()`. Required for:
 
 - Inserting text via the AX API.
-- Creating listen-only CGEvent taps for hotkey and Escape monitoring.
 - Synthesizing Cmd+V keystrokes for the clipboard fallback.
 
 The system prompt dialog is triggered by calling `AXIsProcessTrustedWithOptions` with `kAXTrustedCheckOptionPrompt = true`. Status is also polled while Settings is open.
 
-### No Input Monitoring Required
+### Input Monitoring
 
-A common approach is to use `NSEvent.addGlobalMonitorForEvents` for key monitoring, which requires Input Monitoring permission. This app avoids that entirely by using listen-only CGEvent taps, which only need Accessibility permission. This means one fewer permission dialog for the user.
+Checked with `CGPreflightListenEventAccess()` and requested with `CGRequestListenEventAccess()`. Required for global hotkey and Escape monitoring.
 
 ---
 
@@ -316,7 +321,7 @@ A common approach is to use `NSEvent.addGlobalMonitorForEvents` for key monitori
 | `AppDelegate` UI operations | Main thread |
 | Audio capture tap callback | `AudioCaptureService.queue` (serial background) |
 | Audio buffer writes | `DictationCoordinator.bufferQueue` (serial background) |
-| Groq API requests | Swift concurrency default executor (background) |
+| Gemini API requests | Swift concurrency default executor (background) |
 | CVDisplayLink waveform callback | Display link thread → dispatched to `@MainActor` |
 | Permission polling | Swift concurrency async loop with `Task.sleep` |
 
@@ -334,7 +339,7 @@ Errors are surfaced as a brief message in the menu bar popover. Most auto-dismis
 | Accessibility not granted | Error shown, permission prompt triggered |
 | Microphone not granted | Permission requested asynchronously |
 | Empty recording (silence only) | Silent return — no error, no API call |
-| Groq API 401/403 | "Invalid API key. Check Settings." |
-| Groq API other error | Server error message shown verbatim |
+| Gemini API 401/403 | "Invalid API key. Check Settings." |
+| Gemini API other error | Server error message shown verbatim |
 | Text insertion failed | "Unable to insert text in current app." |
 | Audio format error | "Could not configure audio capture." |

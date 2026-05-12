@@ -158,16 +158,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func updateAnimatedIcon() {
         guard let button = statusItem.button else { return }
         let level = appModel.audioLevel
-        let code = appModel.settings.language.code
 
         button.image = Self.makeWaveformImage(level: level, tick: tick)
-
-        // Show non-English language code next to the waveform.
-        if code.uppercased() != "EN" {
-            button.title = code.uppercased()
-        } else {
-            button.title = ""
-        }
+        button.title = ""
     }
 
     /// Renders the audio-level waveform as a compact template `NSImage`,

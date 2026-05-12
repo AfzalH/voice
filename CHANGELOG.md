@@ -5,6 +5,23 @@ All notable changes to SrizonVoice will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.0] - 2026-05-12
+
+### Changed
+- Replaced the Groq Whisper transcription and LLM cleanup pipeline with Gemini `gemini-3.1-flash-lite`.
+- Settings now save a Gemini API key and output mode for transcription, correction, and translation.
+- The menu bar popup now includes output mode and translation language controls.
+- Added a custom prompt output mode that is edited in Settings and selectable from the popup.
+- Lowered the minimum supported macOS version to 12.0 Monterey.
+- Removed spoken-language selection; Gemini now detects source languages from the audio.
+- Handsfree recording is now the default, with a 1 minute auto-stop.
+- Replaced the handsfree auto-stop text field with a 30 second to 7 minute slider.
+- Improved the Correct things prompt to remove fillers, repetitions, false starts, and mumbling artifacts.
+
+### Removed
+- Removed post-processing model and prompt settings.
+- Removed fast vs. accurate transcription model selection.
+
 ## [2.1.0] - 2026-03-20
 
 ### Added
@@ -54,7 +71,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Build and install automation scripts
 
 ### Technical
-- Built with Swift + SwiftUI for macOS 13+ (Ventura)
+- Built with Swift + SwiftUI for macOS 12+ (Monterey)
 - WebSocket streaming to Gladia `/v2/live` API
 - Binary WebSocket frames with base64 JSON fallback
 - AVAudioEngine-based audio pipeline
@@ -62,6 +79,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CGEvent tap for global Esc key handling
 - SMAppService for launch-at-login registration
 
+[3.0.0]: https://github.com/AfzalH/voice/releases/tag/v3.0.0
 [2.1.0]: https://github.com/AfzalH/voice/releases/tag/v2.1.0
 [2.0.0]: https://github.com/AfzalH/voice/releases/tag/v2.0.0
 [1.0.0]: https://github.com/AfzalH/voice/releases/tag/v1.0.0

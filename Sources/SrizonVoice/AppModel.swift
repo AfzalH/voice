@@ -82,22 +82,15 @@ final class AppModel: ObservableObject {
         stopPermissionPolling()
     }
 
-    func switchLanguage(_ language: LanguageOption) {
+    func switchOutputMode(_ outputMode: TranscriptionOutputMode) {
         objectWillChange.send()
-        // Track the old language in recents
-        let oldLanguage = settings.language
-        if oldLanguage != language {
-            var recents = settings.recentLanguages.filter { $0 != language && $0 != oldLanguage }
-            recents.insert(oldLanguage, at: 0)
-            settings.recentLanguages = Array(recents.prefix(3))
-        }
-        settings.language = language
+        settings.outputMode = outputMode
         saveSettings()
     }
 
-    func togglePostProcessing() {
+    func switchTranslationLanguage(_ language: LanguageOption) {
         objectWillChange.send()
-        settings.postProcessingEnabled.toggle()
+        settings.translationLanguage = language
         saveSettings()
     }
 
@@ -144,71 +137,44 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// Validates the key against the Groq API (and Gemini if enabled), then saves all settings on success.
+    /// Validates the key against the Gemini API, then saves all settings on success.
     func validateAndSaveAPIKey(
         _ key: String,
         hotKey: HotKey,
-        language: LanguageOption? = nil,
-        transcriptionModel: TranscriptionModel = .whisperTurbo,
-        postProcessingEnabled: Bool = true,
-        postProcessingModel: PostProcessingModel = .gptOss120b,
-        postProcessingSystemPrompt: String = "",
-        useGemini: Bool = false,
-        geminiApiKey: String = "",
-        recordingMode: RecordingMode = .pushToTalk,
-        handsfreeMaxMinutes: Int = 5,
+        outputMode: TranscriptionOutputMode = .corrected,
+        customPrompt: String = TranscriptionOutputMode.defaultCustomPrompt,
+        translationLanguage: LanguageOption = .english,
+        recordingMode: RecordingMode = .handsfree,
+        handsfreeMaxSeconds: Int = UserSettings.defaultHandsfreeSeconds,
         completion: @escaping (Bool) -> Void
     ) {
         let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
-            showError("API key cannot be empty.", autoDismiss: false)
-            completion(false)
-            return
-        }
-
-        // Validate Gemini API key if Gemini post-processing is enabled
-        let trimmedGeminiKey = geminiApiKey.trimmingCharacters(in: .whitespacesAndNewlines)
-        if postProcessingEnabled && useGemini && trimmedGeminiKey.isEmpty {
-            showError("Gemini API key cannot be empty when Gemini post-processing is enabled.", autoDismiss: false)
+            showError("Gemini API key cannot be empty.", autoDismiss: false)
             completion(false)
             return
         }
 
         isValidatingKey = true
         Task {
-            let groqValid = await GroqTranscriptionClient.validateAPIKey(trimmed)
-            guard groqValid else {
+            let geminiValid = await GeminiTranscriptionClient.validateAPIKey(trimmed)
+            guard geminiValid else {
                 isValidatingKey = false
-                showError("Invalid Groq API key. Please check and try again.", autoDismiss: false)
+                showError("Invalid Gemini API key. Please check and try again.", autoDismiss: false)
                 completion(false)
                 return
-            }
-
-            // Validate Gemini key if enabled
-            if postProcessingEnabled && useGemini {
-                let geminiValid = await LLMClient.validateGeminiAPIKey(trimmedGeminiKey)
-                guard geminiValid else {
-                    isValidatingKey = false
-                    showError("Invalid Gemini API key. Please check and try again.", autoDismiss: false)
-                    completion(false)
-                    return
-                }
             }
 
             isValidatingKey = false
             settings.apiKey = trimmed
             settings.hotKey = hotKey
-            settings.transcriptionModel = transcriptionModel
-            if let language { settings.language = language }
-            settings.postProcessingEnabled = postProcessingEnabled
-            settings.postProcessingModel = postProcessingModel
-            settings.postProcessingSystemPrompt = postProcessingSystemPrompt.isEmpty
-                ? UserSettings.defaultSystemPrompt
-                : postProcessingSystemPrompt
-            settings.useGemini = useGemini
-            settings.geminiApiKey = trimmedGeminiKey
+            settings.outputMode = outputMode
+            settings.customPrompt = customPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? TranscriptionOutputMode.defaultCustomPrompt
+                : customPrompt
+            settings.translationLanguage = translationLanguage
             settings.recordingMode = recordingMode
-            settings.handsfreeMaxMinutes = max(1, handsfreeMaxMinutes)
+            settings.handsfreeMaxSeconds = UserSettings.clampHandsfreeSeconds(handsfreeMaxSeconds)
             saveSettings()
             errorMessage = nil
             completion(true)
@@ -219,7 +185,7 @@ final class AppModel: ObservableObject {
 
     private func startDictation() {
         if settings.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            showError("Add your Groq API key in Settings.")
+            showError("Add your Gemini API key in Settings.")
             return
         }
         refreshPermissions()
@@ -349,7 +315,7 @@ final class AppModel: ObservableObject {
 
     private func startHandsfreeAutoStop() {
         cancelHandsfreeAutoStop()
-        let maxSeconds = UInt64(settings.handsfreeMaxMinutes) * 60
+        let maxSeconds = UInt64(UserSettings.clampHandsfreeSeconds(settings.handsfreeMaxSeconds))
         handsfreeAutoStopTask = Task {
             try? await Task.sleep(nanoseconds: maxSeconds * 1_000_000_000)
             guard !Task.isCancelled, self.isDictating else { return }

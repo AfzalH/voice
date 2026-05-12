@@ -1,8 +1,8 @@
 # SrizonVoice
 
-Menu bar dictation app for macOS (Ventura+) using Groq Whisper (BYOK).
+Menu bar dictation app for macOS 12 Monterey and later using Gemini audio transcription (BYOK).
 
-Hold a hotkey while speaking, release to transcribe. Text is inserted wherever your cursor is.
+Press a hotkey to record, press it again to transcribe. Text is inserted wherever your cursor is.
 
 ## Download
 
@@ -21,16 +21,17 @@ Download the latest DMG from [GitHub Releases](https://github.com/AfzalH/voice/r
 
 ## Setup
 
-1. Get a free API key from [console.groq.com](https://console.groq.com/keys)
+1. Get a Gemini API key from [aistudio.google.com](https://aistudio.google.com/apikey)
 2. Launch SrizonVoice — Settings opens automatically on first run
-3. Enter your Groq API key and click Save
-4. Grant Microphone and Accessibility permissions when prompted
+3. Enter your Gemini API key and click Save
+4. Grant Microphone, Accessibility, and Input Monitoring permissions when prompted
 
 ## Usage
 
-- **Hold** the hotkey (default: `fn`) while speaking
-- **Release** to stop recording and transcribe
-- **Press Escape** while recording to cancel without transcribing
+- **Press** the hotkey (default: `fn`) to start recording
+- **Press** it again to stop recording and transcribe
+- **Press Escape** while recording to stop and transcribe in handsfree mode
+- Switch to Push to Talk in Settings if you prefer hold-to-record behavior
 - The floating island at the top of the screen shows a live waveform while recording and a spinner while transcribing
 
 ## Run (dev)
@@ -55,14 +56,14 @@ This produces `dist/SrizonVoice.app`.
 
 This produces:
 
-- `dist/SrizonVoice-2.0.0.dmg` — Installer disk image
-- `dist/SrizonVoice-2.0.0.sha256` — Checksum for verification
+- `dist/SrizonVoice-3.0.0.dmg` — Installer disk image
+- `dist/SrizonVoice-3.0.0.sha256` — Checksum for verification
 
 ## Install
 
 From DMG (recommended):
 
-1. Open `SrizonVoice-2.0.0.dmg`
+1. Open `SrizonVoice-3.0.0.dmg`
 2. Drag `SrizonVoice.app` to the `Applications` folder
 3. Launch from Applications or Spotlight
 
@@ -82,27 +83,26 @@ Removes the app, preferences, caches, permissions, and login item:
 
 ## What is included
 
-- **Press-and-hold hotkey** — default `fn` key, fully customizable in Settings
+- **Handsfree recording** — default `fn` key starts/stops recording, with Push to Talk still available in Settings
 - **Mic capture** — `16kHz`, `16-bit`, mono PCM via `AVAudioEngine`
-- **Groq Whisper transcription** — single batch request, no polling
-- **Two model options:**
-  - `whisper-large-v3-turbo` — fast (default)
-  - `whisper-large-v3` — more accurate
+- **Gemini transcription** — `gemini-3.1-flash-lite` handles transcription, correction, and translation in one request
+- **Output modes** — transcribe as-is, clean up speech into grammatical sentences, use a custom saved prompt, translate to a target language, or return original + translation
 - **Floating recording island** — live animated waveform while recording, spinner while transcribing
 - **Text insertion** — Accessibility API first (`AXUIElement`), clipboard + simulated paste fallback (original clipboard restored)
-- **Language selector** — 107 languages with country flags, selectable from the menu bar
+- **Translation language selector** — 107 target languages with country flags for translation modes
 - **Fn key conflict detection** — warns in Settings if the fn key is assigned to a system function
 - **First-run onboarding** — API key, shortcut, and permission checks on launch
-- **Launch at login** — registers via `SMAppService`
+- **Launch at login** — registers via `SMAppService` on macOS 13+
 
 ## Permissions
 
 - **Microphone** — to capture your voice
-- **Accessibility** — to insert text and monitor the hotkey (no Input Monitoring permission required)
+- **Accessibility** — to insert text and support clipboard paste fallback
+- **Input Monitoring** — to monitor the global hotkey and Escape key
 
 ## Privacy
 
-SrizonVoice records audio locally and sends it directly to Groq's servers using your personal API key. No data passes through Srizon servers. Audio is only sent when you actively trigger dictation.
+SrizonVoice records audio locally and sends it directly to Gemini using your personal API key. No data passes through Srizon servers. Audio is only sent when you actively trigger dictation.
 
 **Privacy Policy:** [https://www.srizon.com/privacy](https://www.srizon.com/privacy)
 
