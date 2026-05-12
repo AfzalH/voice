@@ -1,12 +1,16 @@
 # SrizonVoice
 
-Menu bar dictation app for macOS 12 Monterey and later using Gemini audio transcription (BYOK).
+Push-to-talk dictation app for macOS 12 Monterey and later using Gemini audio transcription, automatic spoken-language detection, and optional translation (BYOK).
 
-Press a hotkey to record, press it again to transcribe. Text is inserted wherever your cursor is.
+Press a hotkey to record, press it again to transcribe. Gemini detects the spoken language automatically, and text is inserted wherever your cursor is.
+
+SrizonVoice is free. You only pay Google Gemini API usage through your own API key, which should be very low for typical dictation.
 
 ## Download
 
-Download the latest DMG from [GitHub Releases](https://github.com/AfzalH/voice/releases/latest).
+Download the latest installer: [SrizonVoice-3.0.0.dmg](https://github.com/AfzalH/voice/releases/download/v3.0.0/SrizonVoice-3.0.0.dmg).
+
+Checksums and older builds are available on [GitHub Releases](https://github.com/AfzalH/voice/releases/latest).
 
 > [!WARNING]
 > **"Apple could not verify" Warning**
@@ -85,11 +89,11 @@ Removes the app, preferences, caches, permissions, and login item:
 
 - **Handsfree recording** — default `fn` key starts/stops recording, with Push to Talk still available in Settings
 - **Mic capture** — `16kHz`, `16-bit`, mono PCM via `AVAudioEngine`
-- **Gemini transcription** — `gemini-3.1-flash-lite` handles transcription, correction, and translation in one request
+- **Gemini transcription** — `gemini-3.1-flash-lite` auto-detects the spoken language and handles transcription, correction, and translation in one request
 - **Output modes** — transcribe as-is, clean up speech into grammatical sentences, use a custom saved prompt, translate to a target language, or return original + translation
 - **Floating recording island** — live animated waveform while recording, spinner while transcribing
 - **Text insertion** — Accessibility API first (`AXUIElement`), clipboard + simulated paste fallback (original clipboard restored)
-- **Translation language selector** — 107 target languages with country flags for translation modes
+- **Translation language selector** — all major target languages with country flags for translation modes
 - **Fn key conflict detection** — warns in Settings if the fn key is assigned to a system function
 - **First-run onboarding** — API key, shortcut, and permission checks on launch
 - **Launch at login** — registers via `SMAppService` on macOS 13+

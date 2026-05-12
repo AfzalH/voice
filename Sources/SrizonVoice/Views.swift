@@ -329,7 +329,7 @@ struct SettingsView: View {
     private var generalPanel: some View {
         SettingsCard {
             VStack(alignment: .leading, spacing: 10) {
-                SettingsCardHeader(title: "API Key", subtitle: "Your Gemini API key for transcription")
+                SettingsCardHeader(title: "API Key", subtitle: "Your Gemini API key for transcription and translation")
                 SecureField("Gemini API Key", text: $apiKey)
                     .overlay(
                         RoundedRectangle(cornerRadius: 4)
@@ -448,7 +448,7 @@ struct SettingsView: View {
     private var transcriptionPanel: some View {
         SettingsCard {
             VStack(alignment: .leading, spacing: 10) {
-                SettingsCardHeader(title: "Output", subtitle: "Choose how Gemini returns dictation")
+                SettingsCardHeader(title: "Output", subtitle: "Gemini auto-detects the spoken language and returns the selected output")
                 Picker("Output", selection: $outputMode) {
                     ForEach(TranscriptionOutputMode.allCases, id: \.self) { mode in
                         Text(mode.displayName).tag(mode)
