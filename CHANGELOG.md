@@ -5,6 +5,11 @@ All notable changes to SrizonVoice will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.1] - 2026-05-14
+
+### Fixed
+- Built the installer app as a universal macOS binary so Intel Macs on macOS 12 can install it.
+
 ## [3.0.0] - 2026-05-12
 
 ### Changed
@@ -79,6 +84,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CGEvent tap for global Esc key handling
 - SMAppService for launch-at-login registration
 
+[3.0.1]: https://github.com/AfzalH/voice/releases/tag/v3.0.1
 [3.0.0]: https://github.com/AfzalH/voice/releases/tag/v3.0.0
 [2.1.0]: https://github.com/AfzalH/voice/releases/tag/v2.1.0
 [2.0.0]: https://github.com/AfzalH/voice/releases/tag/v2.0.0

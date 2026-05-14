@@ -2,30 +2,51 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BUILD_DIR="$ROOT_DIR/.build/release"
 DIST_DIR="$ROOT_DIR/dist"
 APP_NAME="SrizonVoice"
 APP_DIR="$DIST_DIR/$APP_NAME.app"
 EXECUTABLE_NAME="SrizonVoice"
-EXECUTABLE_SOURCE="$BUILD_DIR/$EXECUTABLE_NAME"
 EXECUTABLE_DEST="$APP_DIR/Contents/MacOS/$EXECUTABLE_NAME"
 PLIST_PATH="$APP_DIR/Contents/Info.plist"
+VERSION="3.0.1"
+BUILD_NUMBER="7"
+read -r -a ARCHS <<< "${SRIZONVOICE_ARCHS:-arm64 x86_64}"
+
+if [[ ${#ARCHS[@]} -eq 0 ]]; then
+  echo "No architectures configured. Set SRIZONVOICE_ARCHS, for example: SRIZONVOICE_ARCHS=\"arm64 x86_64\""
+  exit 1
+fi
+
+export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-12.0}"
 
 mkdir -p "$DIST_DIR"
 
-echo "Building release binary..."
-swift build -c release --package-path "$ROOT_DIR"
+ARCH_EXECUTABLES=()
+for arch in "${ARCHS[@]}"; do
+  echo "Building release binary ($arch, macOS $MACOSX_DEPLOYMENT_TARGET+)..."
+  swift build -c release --arch "$arch" --package-path "$ROOT_DIR"
 
-if [[ ! -f "$EXECUTABLE_SOURCE" ]]; then
-  echo "Build output not found at $EXECUTABLE_SOURCE"
-  exit 1
-fi
+  BIN_PATH="$(swift build -c release --arch "$arch" --show-bin-path --package-path "$ROOT_DIR")"
+  ARCH_EXECUTABLE="$BIN_PATH/$EXECUTABLE_NAME"
+  if [[ ! -f "$ARCH_EXECUTABLE" ]]; then
+    echo "Build output not found at $ARCH_EXECUTABLE"
+    exit 1
+  fi
+  ARCH_EXECUTABLES+=("$ARCH_EXECUTABLE")
+done
 
 echo "Creating app bundle..."
 rm -rf "$APP_DIR"
 mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
-cp "$EXECUTABLE_SOURCE" "$EXECUTABLE_DEST"
+
+if [[ ${#ARCH_EXECUTABLES[@]} -eq 1 ]]; then
+  cp "${ARCH_EXECUTABLES[0]}" "$EXECUTABLE_DEST"
+else
+  echo "Creating universal binary..."
+  lipo -create "${ARCH_EXECUTABLES[@]}" -output "$EXECUTABLE_DEST"
+fi
 chmod +x "$EXECUTABLE_DEST"
+lipo -info "$EXECUTABLE_DEST"
 
 # Copy app icon if it exists
 if [[ -f "$ROOT_DIR/logo.png" ]]; then
@@ -71,9 +92,9 @@ cat > "$PLIST_PATH" <<'EOF'
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
-  <string>3.0.0</string>
+  <string>__VERSION__</string>
   <key>CFBundleVersion</key>
-  <string>6</string>
+  <string>__BUILD_NUMBER__</string>
   <key>LSMinimumSystemVersion</key>
   <string>12.0</string>
   <key>LSUIElement</key>
@@ -83,6 +104,11 @@ cat > "$PLIST_PATH" <<'EOF'
 </dict>
 </plist>
 EOF
+
+sed -i '' \
+  -e "s/__VERSION__/$VERSION/g" \
+  -e "s/__BUILD_NUMBER__/$BUILD_NUMBER/g" \
+  "$PLIST_PATH"
 
 if command -v codesign >/dev/null 2>&1; then
   echo "Applying ad-hoc signature..."

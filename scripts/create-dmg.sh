@@ -9,7 +9,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIST_DIR="$ROOT_DIR/dist"
 APP_NAME="SrizonVoice"
 APP_BUNDLE="$DIST_DIR/$APP_NAME.app"
-VERSION="3.0.0"
+VERSION="3.0.1"
 DMG_NAME="$APP_NAME-$VERSION"
 DMG_PATH="$DIST_DIR/$DMG_NAME.dmg"
 DMG_TEMP="$DIST_DIR/$DMG_NAME-temp.dmg"
@@ -36,11 +36,9 @@ for vol in /Volumes/$VOL_NAME /Volumes/"$VOL_NAME "*/; do
   fi
 done
 
-# Step 1: Build the app if needed
-if [[ ! -d "$APP_BUNDLE" ]] || [[ "$ROOT_DIR/Sources" -nt "$APP_BUNDLE" ]]; then
-  echo -e "${YELLOW}Building app bundle first...${NC}"
-  bash "$ROOT_DIR/scripts/build-app.sh"
-fi
+# Step 1: Build the app bundle
+echo -e "${YELLOW}Building app bundle first...${NC}"
+bash "$ROOT_DIR/scripts/build-app.sh"
 
 if [[ ! -d "$APP_BUNDLE" ]]; then
   echo "Error: App bundle not found at $APP_BUNDLE"
