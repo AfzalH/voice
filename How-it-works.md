@@ -1,6 +1,6 @@
 # How SrizonVoice Works
 
-SrizonVoice is a macOS menu bar app that lets you dictate text into any application by pressing a hotkey. Press once to record, press again to transcribe with Gemini and insert the text wherever your cursor is.
+SrizonVoice is a macOS menu bar app that lets you dictate text into any application by pressing a hotkey. Press once to record, press again to transcribe with Gemini, choose an optional post-processing action, and insert the final text wherever your cursor was.
 
 ---
 
@@ -30,10 +30,19 @@ User presses hotkey
 User presses hotkey again
   → Audio capture stops
   → PCM data wrapped into WAV file
-  → WAV sent to Gemini with the selected output prompt
-  → Final dictation text returned
-  → Text inserted at cursor (via Accessibility API or clipboard paste)
+  → WAV sent to Gemini for direct transcription in the detected spoken language
+  → Transcript returned
   → Island disappears
+  → Floating post-processing panel appears
+
+User chooses a post-processing action
+  → Current panel text is optionally rewritten by Gemini
+  → Previous text is saved for Undo
+  → Updated text remains in the panel for further post-processing
+
+User clicks Insert Transcript
+  → Panel closes
+  → Final text inserted into the previously focused text area
 
 User presses Escape (while recording)
   → In handsfree mode, recording stops and transcribes
@@ -125,7 +134,7 @@ This is normalized to a 0.0–1.0 range (`min(max(rms * 6, 0.02), 1.0)`) and sen
 
 Owns the audio capture service and accumulates chunks into an in-memory `Data` buffer. A serial `DispatchQueue` serializes all writes to the buffer so chunks from the audio tap (which arrive on a background thread) don't race with the read that happens at stop time.
 
-`startRecording()` clears the buffer and starts capture. `stopRecordingAndTranscribe()` stops capture, snapshots the buffer, and hands it off to the transcription pipeline.
+`startRecording()` clears the buffer and starts capture. `AppModel` captures the currently focused text target before recording starts so a later interactive panel can safely take focus. `stopRecordingAndTranscribe()` stops capture, snapshots the buffer, and hands it off to the transcription pipeline.
 
 ### WAV File Construction
 
@@ -144,7 +153,7 @@ All multi-byte integers are little-endian, matching the WAV specification.
 
 ## Transcription
 
-**Files:** `Services.swift` → `GeminiTranscriptionClient`, `Models.swift` → `TranscriptionOutputMode`
+**File:** `Services.swift` → `GeminiTranscriptionClient`
 
 ### GeminiTranscriptionClient
 
@@ -162,24 +171,34 @@ For normal recordings, the WAV bytes are sent inline as base64 audio:
 |---|---|
 | `contents.parts[].inline_data.mime_type` | `audio/wav` |
 | `contents.parts[].inline_data.data` | Base64 WAV bytes |
-| `contents.parts[].text` | Prompt for the selected output mode |
+| `contents.parts[].text` | Direct transcription prompt |
 | `generation_config.temperature` | `0` |
 
 If the WAV is too large for an inline request, it is first uploaded through Gemini's resumable Files API and then referenced with `file_data` in the `generateContent` request.
 
-The response text is extracted from `candidates[].content.parts[].text` and inserted directly. There is no second cleanup request.
+The response text is extracted from `candidates[].content.parts[].text` and shown in the post-processing panel. The transcription prompt asks Gemini to detect the spoken language and transcribe in that same language without translating, rewriting, summarizing, or answering questions.
 
-### Output Modes
+### Post-Processing
 
-Gemini receives one prompt tailored to the selected mode:
+**Files:** `Services.swift` → `GeminiPostProcessingClient`, `Panels.swift` → `PostProcessingPanelController`
 
-| Mode | Behavior |
+After transcription, a floating panel shows the direct transcript as editable current text and predefined actions:
+
+| Action | Behavior |
 |---|---|
-| As is | Transcribes without intentional correction or translation |
-| Correct things | Removes filler sounds, hesitation words, repetition, false starts, and mumbling artifacts, then returns grammatically corrected sentences |
-| Custom prompt | Uses the saved custom instruction from Settings, initially seeded with the Correct things prompt |
-| Translate to target language | Outputs only the target-language translation |
-| Original + target translation | Outputs `original - translation`, one utterance per line |
+| Insert transcript | Inserts the current panel text without another request |
+| Clean up | Removes filler words, stutters, false starts, repetition, and obvious transcription artifacts |
+| Translate favorites | Translates to either of the two saved favorite languages with one click |
+| Translate selected | Translates to the language chosen in the full language picker |
+| Add emoji | Adds tasteful, relevant emoji while keeping the wording mostly intact |
+| Casual | Rewrites in a casual conversational style |
+| Formal | Rewrites in a polished formal style |
+| Technical | Rewrites in a precise technical style without inventing details |
+| Compact | Rewrites the current text more concisely |
+| Custom prompt | Applies a one-off or saved user-defined instruction |
+| Undo | Restores the previous text before the last successful post-processing action |
+
+Post-processing uses a text-only `generateContent` request against the current panel text, not always the original transcript. On success, the previous current text is pushed onto an undo stack and the processed text stays in the panel so the user can chain another action, such as translate first and compact second. The panel only closes and inserts automatically when the user has enabled the auto-insert checkbox; otherwise insertion is explicit via the prominent Insert Transcript button.
 
 ### API Key Validation
 
@@ -191,15 +210,15 @@ When saving settings, the key is validated by making a `GET` request to `https:/
 
 **File:** `Services.swift` → `TextInsertionService`
 
-After transcription, the text needs to appear at the cursor in whatever app is frontmost. Two strategies are attempted in order.
+After post-processing, the text needs to appear at the cursor in the app that was focused before recording. `TextInsertionService.captureCurrentTarget()` stores the frontmost app, process ID, bundle ID, and focused `AXUIElement` before recording starts. The app reactivates that target as needed before insertion. Two strategies are attempted in order.
 
 ### Strategy 1 — Accessibility API
 
 The macOS Accessibility API lets the app directly write text into focused UI elements:
 
 1. Get the system-wide `AXUIElement`.
-2. Query `kAXFocusedUIElementAttribute` to find the element the user is typing into.
-3. Set `kAXSelectedTextAttribute` on that element with the transcript. This replaces any selected text and inserts at the cursor, exactly as if the user had typed it.
+2. Prefer the captured focused element; if unavailable, query `kAXFocusedUIElementAttribute` to find the current focused element.
+3. Set `kAXSelectedTextAttribute` on that element with the final text. This replaces any selected text and inserts at the cursor, exactly as if the user had typed it.
 4. If that fails, walk up to 5 levels of child elements looking for a text-insertion point, trying both `setSelected` and `setValue`.
 
 This is the most accurate method — it preserves undo history in most apps and doesn't touch the clipboard.
@@ -209,7 +228,7 @@ This is the most accurate method — it preserves undo history in most apps and 
 For apps where the AX API doesn't work well (Notes and Pages skip straight to this path, as they're more reliable this way):
 
 1. **Snapshot the clipboard.** All current pasteboard items and their data types (plain text, HTML, RTF, images, etc.) are captured and saved in memory.
-2. Clear the pasteboard and write the transcript as plain text.
+2. Clear the pasteboard and write the final text as plain text.
 3. Wait 50ms for clipboard propagation.
 4. **Synthesize a Cmd+V keystroke** using `CGEvent`:
    - Create a key-down event for key code `kVK_ANSI_V` with `.maskCommand` flag.
@@ -252,7 +271,7 @@ A "Transcribing" label with an animated ellipsis (`.` → `..` → `...` → bla
 
 ## Settings & Persistence
 
-**File:** `Models.swift` → `UserSettings`, `HotKey`, `TranscriptionOutputMode`
+**File:** `Models.swift` → `UserSettings`, `HotKey`, `CustomPostProcessingPrompt`
 
 All settings are stored in `UserDefaults.standard`:
 
@@ -260,11 +279,14 @@ All settings are stored in `UserDefaults.standard`:
 |---|---|---|
 | `gemini.apiKey` | String | `""` |
 | `app.hotKey` | JSON-encoded `HotKey` | Fn key |
-| `dictation.outputMode` | String | `"corrected"` |
-| `dictation.customPrompt` | String | Correct things prompt |
+| `postProcessing.customPrompts` | JSON-encoded `[CustomPostProcessingPrompt]` | `[]` |
 | `dictation.translationLanguage` | String (ISO code) | `"en"` |
+| `postProcessing.favoriteTranslationLanguage1` | String (ISO code) | `"en"` |
+| `postProcessing.favoriteTranslationLanguage2` | String (ISO code) | `"de"` |
 | `app.recordingMode` | String | `"handsfree"` |
 | `app.handsfreeMaxSeconds` | Int | `60` |
+
+Older `dictation.customPrompt` values are migrated into the saved post-processing prompt list when possible.
 
 `HotKey` is a `Codable` struct with `keyCode`, `modifiers`, and `isFnKey`. The custom `init(from:)` decodes `isFnKey` with `decodeIfPresent` defaulting to `false`, so older saved hotkeys without that field continue to work.
 

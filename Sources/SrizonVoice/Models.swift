@@ -365,6 +365,68 @@ enum TranscriptionOutputMode: String, CaseIterable, Codable {
     static let defaultCustomPrompt = "Transcribe the speech into clean, grammatically correct sentences. Remove filler sounds and hesitation words such as um, uh, ah, er, hmm, like, and you know when they do not add meaning. Remove stutters, repeated words, false starts, mumbling artifacts, and partial phrases. Correct obvious transcription errors, grammar, punctuation, capitalization, and formatting. Preserve the speaker's intended meaning, language, and tone. Return only polished final sentences."
 }
 
+// MARK: - PostProcessing
+
+struct CustomPostProcessingPrompt: Identifiable, Codable, Equatable {
+    var id: UUID
+    var title: String
+    var prompt: String
+
+    init(id: UUID = UUID(), title: String, prompt: String) {
+        self.id = id
+        self.title = title
+        self.prompt = prompt
+    }
+}
+
+enum PostProcessingAction {
+    case cleanUp
+    case translate(LanguageOption)
+    case addEmoji
+    case makeCasual
+    case makeFormal
+    case makeTechnical
+    case makeCompact
+    case custom(title: String?, prompt: String)
+
+    var displayName: String {
+        switch self {
+        case .cleanUp:              return "Clean up"
+        case .translate(let lang):  return "Translate to \(lang.plainName)"
+        case .addEmoji:             return "Add emoji"
+        case .makeCasual:           return "Make casual"
+        case .makeFormal:           return "Make formal"
+        case .makeTechnical:        return "Make technical"
+        case .makeCompact:          return "Make compact"
+        case .custom(let title, _):
+            let trimmed = title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return trimmed.isEmpty ? "Custom prompt" : trimmed
+        }
+    }
+
+    var instruction: String {
+        switch self {
+        case .cleanUp:
+            return "Clean up the transcript into grammatically correct, natural sentences. Remove filler words, stutters, false starts, repeated words, and obvious transcription artifacts. Preserve the original language, meaning, and tone."
+        case .translate(let language):
+            return "Translate the transcript to \(language.plainName) (\(language.code)). Return only the translated text."
+        case .addEmoji:
+            return "Add tasteful, relevant emoji where they improve clarity or tone. Keep the original language and wording mostly intact. Do not overuse emoji."
+        case .makeCasual:
+            return "Rewrite the transcript in a casual, conversational style. Preserve the original language and intended meaning."
+        case .makeFormal:
+            return "Rewrite the transcript in a polished, formal style. Preserve the original language and intended meaning."
+        case .makeTechnical:
+            return "Rewrite the transcript so it sounds precise and technical. Preserve the original language and intended meaning, and do not invent technical details."
+        case .makeCompact:
+            return "Rewrite the transcript to be compact and concise. Preserve the original language, meaning, and important details. Remove redundancy and unnecessary words."
+        case .custom(_, let prompt):
+            let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? PostProcessingAction.cleanUp.instruction : trimmed
+        }
+    }
+}
+
 // MARK: - UserSettings
 
 final class UserSettings {
@@ -373,7 +435,10 @@ final class UserSettings {
         static let hotKey              = "app.hotKey"
         static let outputMode          = "dictation.outputMode"
         static let customPrompt        = "dictation.customPrompt"
+        static let customPostPrompts   = "postProcessing.customPrompts"
         static let translationLanguage = "dictation.translationLanguage"
+        static let favoriteTranslationLanguage1 = "postProcessing.favoriteTranslationLanguage1"
+        static let favoriteTranslationLanguage2 = "postProcessing.favoriteTranslationLanguage2"
         static let recordingMode       = "app.recordingMode"
         static let handsfreeMaxSeconds = "app.handsfreeMaxSeconds"
         static let legacyHandsfreeMaxMinutes = "app.handsfreeMaxMinutes"
@@ -387,7 +452,10 @@ final class UserSettings {
     var hotKey = HotKey.defaultValue
     var outputMode: TranscriptionOutputMode = .corrected
     var customPrompt: String = TranscriptionOutputMode.defaultCustomPrompt
+    var customPostProcessingPrompts: [CustomPostProcessingPrompt] = []
     var translationLanguage: LanguageOption = .english
+    var favoriteTranslationLanguage1: LanguageOption = .english
+    var favoriteTranslationLanguage2: LanguageOption = .german
     var recordingMode: RecordingMode = .handsfree
     var handsfreeMaxSeconds: Int = UserSettings.defaultHandsfreeSeconds
 
@@ -409,10 +477,35 @@ final class UserSettings {
         if customPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             customPrompt = TranscriptionOutputMode.defaultCustomPrompt
         }
+        if let data = defaults.data(forKey: Key.customPostPrompts),
+           let decoded = try? JSONDecoder().decode([CustomPostProcessingPrompt].self, from: data)
+        {
+            customPostProcessingPrompts = Self.normalizedCustomPostProcessingPrompts(decoded)
+        } else {
+            customPostProcessingPrompts = []
+        }
+        if customPostProcessingPrompts.isEmpty,
+           customPrompt != TranscriptionOutputMode.defaultCustomPrompt,
+           !customPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        {
+            customPostProcessingPrompts = [
+                CustomPostProcessingPrompt(title: "Saved custom prompt", prompt: customPrompt)
+            ]
+        }
         if let raw = defaults.string(forKey: Key.translationLanguage),
            let option = LanguageOption(rawValue: raw)
         {
             translationLanguage = option
+        }
+        if let raw = defaults.string(forKey: Key.favoriteTranslationLanguage1),
+           let option = LanguageOption(rawValue: raw)
+        {
+            favoriteTranslationLanguage1 = option
+        }
+        if let raw = defaults.string(forKey: Key.favoriteTranslationLanguage2),
+           let option = LanguageOption(rawValue: raw)
+        {
+            favoriteTranslationLanguage2 = option
         }
         if let raw = defaults.string(forKey: Key.recordingMode),
            let mode = RecordingMode(rawValue: raw)
@@ -431,7 +524,13 @@ final class UserSettings {
         defaults.set(apiKey, forKey: Key.apiKey)
         defaults.set(outputMode.rawValue, forKey: Key.outputMode)
         defaults.set(customPrompt, forKey: Key.customPrompt)
+        customPostProcessingPrompts = Self.normalizedCustomPostProcessingPrompts(customPostProcessingPrompts)
+        if let data = try? JSONEncoder().encode(customPostProcessingPrompts) {
+            defaults.set(data, forKey: Key.customPostPrompts)
+        }
         defaults.set(translationLanguage.rawValue, forKey: Key.translationLanguage)
+        defaults.set(favoriteTranslationLanguage1.rawValue, forKey: Key.favoriteTranslationLanguage1)
+        defaults.set(favoriteTranslationLanguage2.rawValue, forKey: Key.favoriteTranslationLanguage2)
         defaults.set(recordingMode.rawValue, forKey: Key.recordingMode)
         defaults.set(Self.clampHandsfreeSeconds(handsfreeMaxSeconds), forKey: Key.handsfreeMaxSeconds)
         if let data = try? JSONEncoder().encode(hotKey) {
@@ -441,6 +540,19 @@ final class UserSettings {
 
     static func clampHandsfreeSeconds(_ seconds: Int) -> Int {
         min(max(seconds, minHandsfreeSeconds), maxHandsfreeSeconds)
+    }
+
+    static func normalizedCustomPostProcessingPrompts(_ prompts: [CustomPostProcessingPrompt]) -> [CustomPostProcessingPrompt] {
+        prompts.compactMap { prompt in
+            let title = prompt.title.trimmingCharacters(in: .whitespacesAndNewlines)
+            let body = prompt.prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !body.isEmpty else { return nil }
+            return CustomPostProcessingPrompt(
+                id: prompt.id,
+                title: title.isEmpty ? "Custom prompt" : title,
+                prompt: body
+            )
+        }
     }
 }
 

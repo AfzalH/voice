@@ -8,8 +8,8 @@ APP_DIR="$DIST_DIR/$APP_NAME.app"
 EXECUTABLE_NAME="SrizonVoice"
 EXECUTABLE_DEST="$APP_DIR/Contents/MacOS/$EXECUTABLE_NAME"
 PLIST_PATH="$APP_DIR/Contents/Info.plist"
-VERSION="3.0.1"
-BUILD_NUMBER="7"
+VERSION="3.1.0"
+BUILD_NUMBER="8"
 read -r -a ARCHS <<< "${SRIZONVOICE_ARCHS:-arm64 x86_64}"
 
 if [[ ${#ARCHS[@]} -eq 0 ]]; then

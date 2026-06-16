@@ -5,6 +5,19 @@ All notable changes to SrizonVoice will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.0] - 2026-06-16
+
+### Added
+- Added an interactive post-processing panel after transcription with cleanup, translation, emoji, casual, formal, technical, compact, and custom prompt actions.
+- Added undo history and an editable current-text review loop so multiple post-processing actions can be chained before insertion.
+- Added optional auto-insert after post-processing, disabled by default.
+- Added two favorite translation languages for one-click translation actions.
+- Added saved custom post-processing prompts in Settings and from the floating panel.
+
+### Changed
+- Gemini now transcribes speech directly in the detected spoken language before any post-processing is applied.
+- Text insertion now targets the previously focused app after the post-processing panel closes.
+
 ## [3.0.1] - 2026-05-14
 
 ### Fixed
@@ -84,6 +97,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CGEvent tap for global Esc key handling
 - SMAppService for launch-at-login registration
 
+[3.1.0]: https://github.com/AfzalH/voice/releases/tag/v3.1.0
 [3.0.1]: https://github.com/AfzalH/voice/releases/tag/v3.0.1
 [3.0.0]: https://github.com/AfzalH/voice/releases/tag/v3.0.0
 [2.1.0]: https://github.com/AfzalH/voice/releases/tag/v2.1.0

@@ -31,6 +31,14 @@ struct MenuBarContentView: View {
                     Text("Transcribing...")
                         .foregroundStyle(.secondary)
                 }
+            } else if model.isPostProcessing {
+                HStack {
+                    Image(systemName: "wand.and.stars")
+                        .foregroundStyle(.secondary)
+                    Text("Post-processing...")
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
             } else {
                 HStack {
                     if model.settings.recordingMode == .pushToTalk {
@@ -42,23 +50,12 @@ struct MenuBarContentView: View {
                 }
             }
 
-            Picker("Output", selection: Binding(
-                get: { model.settings.outputMode },
-                set: { model.switchOutputMode($0) }
+            Picker("Translate to", selection: Binding(
+                get: { model.settings.translationLanguage },
+                set: { model.switchTranslationLanguage($0) }
             )) {
-                ForEach(TranscriptionOutputMode.allCases, id: \.self) { mode in
-                    Text(mode.displayName).tag(mode)
-                }
-            }
-
-            if model.settings.outputMode.requiresTargetLanguage {
-                Picker("Translate to", selection: Binding(
-                    get: { model.settings.translationLanguage },
-                    set: { model.switchTranslationLanguage($0) }
-                )) {
-                    ForEach(LanguageOption.allCases, id: \.self) { language in
-                        Text(language.displayName).tag(language)
-                    }
+                ForEach(LanguageOption.allCases, id: \.self) { language in
+                    Text(language.displayName).tag(language)
                 }
             }
 
@@ -102,14 +99,14 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
     var label: String {
         switch self {
         case .general:        return "General"
-        case .transcription:  return "Transcription"
+        case .transcription:  return "Post-processing"
         }
     }
 
     var icon: String {
         switch self {
         case .general:        return "gearshape"
-        case .transcription:  return "waveform"
+        case .transcription:  return "wand.and.stars"
         }
     }
 }
@@ -160,9 +157,10 @@ struct SettingsView: View {
     @State private var selectedTab: SettingsTab = .general
     @State private var apiKey: String = ""
     @State private var hotKey = HotKey.defaultValue
-    @State private var outputMode = TranscriptionOutputMode.corrected
-    @State private var customPrompt = TranscriptionOutputMode.defaultCustomPrompt
     @State private var translationLanguage = LanguageOption.english
+    @State private var favoriteTranslationLanguage1 = LanguageOption.english
+    @State private var favoriteTranslationLanguage2 = LanguageOption.german
+    @State private var customPrompts: [CustomPostProcessingPrompt] = []
     @State private var recordingMode: RecordingMode = .handsfree
     @State private var handsfreeMaxSeconds: Double = Double(UserSettings.defaultHandsfreeSeconds)
 
@@ -273,9 +271,10 @@ struct SettingsView: View {
                             model.validateAndSaveAPIKey(
                                 apiKey,
                                 hotKey: hotKey,
-                                outputMode: outputMode,
-                                customPrompt: customPrompt,
                                 translationLanguage: translationLanguage,
+                                favoriteTranslationLanguage1: favoriteTranslationLanguage1,
+                                favoriteTranslationLanguage2: favoriteTranslationLanguage2,
+                                customPostProcessingPrompts: customPrompts,
                                 recordingMode: recordingMode,
                                 handsfreeMaxSeconds: Int(handsfreeMaxSeconds)
                             ) { _ in }
@@ -285,9 +284,10 @@ struct SettingsView: View {
                             model.validateAndSaveAPIKey(
                                 apiKey,
                                 hotKey: hotKey,
-                                outputMode: outputMode,
-                                customPrompt: customPrompt,
                                 translationLanguage: translationLanguage,
+                                favoriteTranslationLanguage1: favoriteTranslationLanguage1,
+                                favoriteTranslationLanguage2: favoriteTranslationLanguage2,
+                                customPostProcessingPrompts: customPrompts,
                                 recordingMode: recordingMode,
                                 handsfreeMaxSeconds: Int(handsfreeMaxSeconds)
                             ) { success in
@@ -313,9 +313,10 @@ struct SettingsView: View {
         .onAppear {
             apiKey = model.settings.apiKey
             hotKey = model.settings.hotKey
-            outputMode = model.settings.outputMode
-            customPrompt = model.settings.customPrompt
             translationLanguage = model.settings.translationLanguage
+            favoriteTranslationLanguage1 = model.settings.favoriteTranslationLanguage1
+            favoriteTranslationLanguage2 = model.settings.favoriteTranslationLanguage2
+            customPrompts = model.settings.customPostProcessingPrompts
             recordingMode = model.settings.recordingMode
             handsfreeMaxSeconds = Double(UserSettings.clampHandsfreeSeconds(model.settings.handsfreeMaxSeconds))
             model.errorMessage = nil
@@ -448,35 +449,20 @@ struct SettingsView: View {
     private var transcriptionPanel: some View {
         SettingsCard {
             VStack(alignment: .leading, spacing: 10) {
-                SettingsCardHeader(title: "Output", subtitle: "Gemini auto-detects the spoken language and returns the selected output")
-                Picker("Output", selection: $outputMode) {
-                    ForEach(TranscriptionOutputMode.allCases, id: \.self) { mode in
-                        Text(mode.displayName).tag(mode)
+                SettingsCardHeader(title: "Translation", subtitle: "Used by the floating post-processing panel")
+                Picker("Default chooser language", selection: $translationLanguage) {
+                    ForEach(LanguageOption.allCases, id: \.self) { option in
+                        Text(option.displayName).tag(option)
                     }
                 }
-                .pickerStyle(.radioGroup)
-                .labelsHidden()
-                .onChange(of: outputMode) { mode in
-                    if mode == .customPrompt,
-                       customPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                    {
-                        customPrompt = TranscriptionOutputMode.defaultCustomPrompt
+                Divider()
+                HStack(spacing: 12) {
+                    Picker("Favorite 1", selection: $favoriteTranslationLanguage1) {
+                        ForEach(LanguageOption.allCases, id: \.self) { option in
+                            Text(option.displayName).tag(option)
+                        }
                     }
-                }
-
-                if outputMode == .customPrompt {
-                    Divider()
-                    SettingsCardHeader(title: "Custom Prompt", subtitle: "Used with the shared transcription guardrails above")
-                    TextEditor(text: $customPrompt)
-                        .font(.system(.body, design: .monospaced))
-                        .frame(minHeight: 120)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 4)
-                                .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
-                        )
-                } else if outputMode.requiresTargetLanguage {
-                    Divider()
-                    Picker("Translate to", selection: $translationLanguage) {
+                    Picker("Favorite 2", selection: $favoriteTranslationLanguage2) {
                         ForEach(LanguageOption.allCases, id: \.self) { option in
                             Text(option.displayName).tag(option)
                         }
@@ -484,6 +470,52 @@ struct SettingsView: View {
                 }
             }
         }
+
+        SettingsCard {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    SettingsCardHeader(title: "Custom Prompts", subtitle: "Shown as saved actions after transcription")
+                    Spacer()
+                    Button {
+                        customPrompts.append(CustomPostProcessingPrompt(title: "New prompt", prompt: ""))
+                    } label: {
+                        Label("Add", systemImage: "plus")
+                    }
+                }
+
+                if customPrompts.isEmpty {
+                    Text("No custom prompts saved.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach($customPrompts) { $prompt in
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                TextField("Prompt name", text: $prompt.title)
+                                Button(role: .destructive) {
+                                    deleteCustomPrompt(prompt.id)
+                                } label: {
+                                    Image(systemName: "trash")
+                                }
+                                .buttonStyle(.borderless)
+                            }
+                            TextEditor(text: $prompt.prompt)
+                                .font(.system(.body, design: .monospaced))
+                                .frame(minHeight: 90)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 4)
+                                        .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
+                                )
+                        }
+                        .padding(.vertical, 6)
+                    }
+                }
+            }
+        }
+    }
+
+    private func deleteCustomPrompt(_ id: UUID) {
+        customPrompts.removeAll { $0.id == id }
     }
 }
 

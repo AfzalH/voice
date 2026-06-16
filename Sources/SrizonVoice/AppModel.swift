@@ -6,13 +6,16 @@ import SwiftUI
 final class AppModel: ObservableObject {
     @Published var isDictating = false
     @Published var isTranscribing = false
+    @Published var isPostProcessing = false
     @Published var audioLevel: Float = 0
     @Published var errorMessage: String?
     @Published var isValidatingKey = false
 
     let settings = UserSettings()
     private let insertionService = TextInsertionService()
+    private let postProcessingClient = GeminiPostProcessingClient()
     private let recordingIslandController = RecordingIslandController()
+    private let postProcessingPanelController = PostProcessingPanelController()
     private lazy var dictationCoordinator = DictationCoordinator(
         settings: settings,
         insertionService: insertionService
@@ -24,6 +27,7 @@ final class AppModel: ObservableObject {
     private var errorDismissTask: Task<Void, Never>?
     private var permissionPollTask: Task<Void, Never>?
     private var handsfreeAutoStopTask: Task<Void, Never>?
+    private var pendingInsertionTarget: TextInsertionTarget?
 
     init() {
         settings.load()
@@ -141,9 +145,10 @@ final class AppModel: ObservableObject {
     func validateAndSaveAPIKey(
         _ key: String,
         hotKey: HotKey,
-        outputMode: TranscriptionOutputMode = .corrected,
-        customPrompt: String = TranscriptionOutputMode.defaultCustomPrompt,
         translationLanguage: LanguageOption = .english,
+        favoriteTranslationLanguage1: LanguageOption = .english,
+        favoriteTranslationLanguage2: LanguageOption = .german,
+        customPostProcessingPrompts: [CustomPostProcessingPrompt] = [],
         recordingMode: RecordingMode = .handsfree,
         handsfreeMaxSeconds: Int = UserSettings.defaultHandsfreeSeconds,
         completion: @escaping (Bool) -> Void
@@ -168,11 +173,10 @@ final class AppModel: ObservableObject {
             isValidatingKey = false
             settings.apiKey = trimmed
             settings.hotKey = hotKey
-            settings.outputMode = outputMode
-            settings.customPrompt = customPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                ? TranscriptionOutputMode.defaultCustomPrompt
-                : customPrompt
             settings.translationLanguage = translationLanguage
+            settings.favoriteTranslationLanguage1 = favoriteTranslationLanguage1
+            settings.favoriteTranslationLanguage2 = favoriteTranslationLanguage2
+            settings.customPostProcessingPrompts = UserSettings.normalizedCustomPostProcessingPrompts(customPostProcessingPrompts)
             settings.recordingMode = recordingMode
             settings.handsfreeMaxSeconds = UserSettings.clampHandsfreeSeconds(handsfreeMaxSeconds)
             saveSettings()
@@ -194,6 +198,7 @@ final class AppModel: ObservableObject {
             requestPermissions()
             return
         }
+        pendingInsertionTarget = insertionService.captureCurrentTarget()
 
         Task {
             let micGranted = await permissionManager.requestMicrophonePermission()
@@ -223,9 +228,16 @@ final class AppModel: ObservableObject {
         NSSound(named: "Pop")?.play()
 
         Task {
-            await dictationCoordinator.stopRecordingAndTranscribe()
+            let target = pendingInsertionTarget ?? insertionService.captureCurrentTarget()
+            let targetAppName = target?.appName ?? "Unknown App"
+            let transcript = await dictationCoordinator.stopRecordingAndTranscribe(targetAppName: targetAppName)
             isTranscribing = false
             recordingIslandController.hide()
+            guard let transcript else {
+                pendingInsertionTarget = nil
+                return
+            }
+            presentPostProcessingPanel(transcript: transcript, target: target)
         }
     }
 
@@ -260,6 +272,7 @@ final class AppModel: ObservableObject {
                 self?.showError(message)
                 self?.isDictating = false
                 self?.isTranscribing = false
+                self?.isPostProcessing = false
                 self?.recordingIslandController.hide()
             }
         }
@@ -267,6 +280,7 @@ final class AppModel: ObservableObject {
         hotKeyMonitor.onKeyDown = { [weak self] in
             Task { @MainActor in
                 guard let self else { return }
+                guard !self.isPostProcessing else { return }
                 if self.settings.recordingMode == .pushToTalk {
                     // Push-to-talk: press starts
                     guard !self.isDictating, !self.isTranscribing else { return }
@@ -285,6 +299,7 @@ final class AppModel: ObservableObject {
         hotKeyMonitor.onKeyUp = { [weak self] in
             Task { @MainActor in
                 guard let self else { return }
+                guard !self.isPostProcessing else { return }
                 if self.settings.recordingMode == .pushToTalk {
                     self.stopDictation()
                 }
@@ -326,6 +341,91 @@ final class AppModel: ObservableObject {
     private func cancelHandsfreeAutoStop() {
         handsfreeAutoStopTask?.cancel()
         handsfreeAutoStopTask = nil
+    }
+
+    private func presentPostProcessingPanel(transcript: String, target: TextInsertionTarget?) {
+        let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            pendingInsertionTarget = nil
+            return
+        }
+
+        isPostProcessing = true
+        let targetAppName = target?.appName ?? "the target app"
+        let apiKey = settings.apiKey
+        let initialLanguage = settings.translationLanguage
+        let favoriteLanguages = [
+            settings.favoriteTranslationLanguage1,
+            settings.favoriteTranslationLanguage2,
+        ]
+        let customPrompts = settings.customPostProcessingPrompts
+        let processor = postProcessingClient
+
+        postProcessingPanelController.show(
+            transcript: trimmed,
+            targetAppName: targetAppName,
+            translationLanguage: initialLanguage,
+            favoriteTranslationLanguages: favoriteLanguages,
+            customPrompts: customPrompts,
+            processAction: { sourceText, action in
+                try await processor.process(
+                    apiKey: apiKey,
+                    transcript: sourceText,
+                    action: action,
+                    targetAppName: targetAppName
+                )
+            },
+            insertText: { [weak self] finalText in
+                Task { @MainActor in
+                    self?.completePostProcessing(with: finalText, target: target)
+                }
+            },
+            savePrompt: { [weak self] title, prompt in
+                guard let self else { return [] }
+                return self.saveCustomPostProcessingPrompt(title: title, prompt: prompt)
+            },
+            onClosed: { [weak self] in
+                Task { @MainActor in
+                    self?.isPostProcessing = false
+                    self?.pendingInsertionTarget = nil
+                }
+            }
+        )
+    }
+
+    private func completePostProcessing(with text: String, target: TextInsertionTarget?) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            showError("Post-processing returned empty text.")
+            return
+        }
+
+        postProcessingPanelController.hide()
+        isPostProcessing = false
+        pendingInsertionTarget = nil
+
+        let success = insertionService.insertText(trimmed, into: target)
+        if !success {
+            showError("Unable to insert text in target app.")
+        }
+    }
+
+    private func saveCustomPostProcessingPrompt(title: String, prompt: String) -> [CustomPostProcessingPrompt] {
+        let cleanPrompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanPrompt.isEmpty else {
+            return settings.customPostProcessingPrompts
+        }
+
+        let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let fallbackTitle = cleanPrompt.split(separator: "\n", maxSplits: 1).first.map(String.init) ?? "Custom prompt"
+        let promptTitle = cleanTitle.isEmpty ? String(fallbackTitle.prefix(36)) : cleanTitle
+        settings.customPostProcessingPrompts.append(
+            CustomPostProcessingPrompt(title: promptTitle, prompt: cleanPrompt)
+        )
+        settings.customPostProcessingPrompts = UserSettings.normalizedCustomPostProcessingPrompts(settings.customPostProcessingPrompts)
+        saveSettings()
+        objectWillChange.send()
+        return settings.customPostProcessingPrompts
     }
 
     func refreshPermissions() {
