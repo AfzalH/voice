@@ -144,7 +144,9 @@ final class AppModel: ObservableObject {
     /// Validates the key against the Gemini API, then saves all settings on success.
     func validateAndSaveAPIKey(
         _ key: String,
+        geminiModel: GeminiModel = .defaultValue,
         hotKey: HotKey,
+        postProcessingEnabled: Bool = true,
         translationLanguage: LanguageOption = .english,
         favoriteTranslationLanguage1: LanguageOption = .english,
         favoriteTranslationLanguage2: LanguageOption = .german,
@@ -172,7 +174,9 @@ final class AppModel: ObservableObject {
 
             isValidatingKey = false
             settings.apiKey = trimmed
+            settings.geminiModel = geminiModel
             settings.hotKey = hotKey
+            settings.postProcessingEnabled = postProcessingEnabled
             settings.translationLanguage = translationLanguage
             settings.favoriteTranslationLanguage1 = favoriteTranslationLanguage1
             settings.favoriteTranslationLanguage2 = favoriteTranslationLanguage2
@@ -235,6 +239,10 @@ final class AppModel: ObservableObject {
             recordingIslandController.hide()
             guard let transcript else {
                 pendingInsertionTarget = nil
+                return
+            }
+            guard settings.postProcessingEnabled else {
+                completePostProcessing(with: transcript, target: target)
                 return
             }
             presentPostProcessingPanel(transcript: transcript, target: target)
@@ -359,17 +367,20 @@ final class AppModel: ObservableObject {
             settings.favoriteTranslationLanguage2,
         ]
         let customPrompts = settings.customPostProcessingPrompts
+        let selectedModel = settings.geminiModel
         let processor = postProcessingClient
 
         postProcessingPanelController.show(
             transcript: trimmed,
             targetAppName: targetAppName,
+            anchorPoint: target?.caretScreenPoint,
             translationLanguage: initialLanguage,
             favoriteTranslationLanguages: favoriteLanguages,
             customPrompts: customPrompts,
             processAction: { sourceText, action in
                 try await processor.process(
                     apiKey: apiKey,
+                    model: selectedModel,
                     transcript: sourceText,
                     action: action,
                     targetAppName: targetAppName
@@ -404,9 +415,9 @@ final class AppModel: ObservableObject {
         isPostProcessing = false
         pendingInsertionTarget = nil
 
-        let success = insertionService.insertText(trimmed, into: target)
+        let success = insertionService.insertText(trimmed, into: target, copyToClipboard: true)
         if !success {
-            showError("Unable to insert text in target app.")
+            showError("Text copied to clipboard, but could not be inserted in the target app.")
         }
     }
 

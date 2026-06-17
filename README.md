@@ -35,7 +35,7 @@ Checksums and older builds are available on [GitHub Releases](https://github.com
 - **Press** the hotkey (default: `fn`) to start recording
 - **Press** it again to stop recording and transcribe
 - **Press Escape** while recording to stop and transcribe in handsfree mode
-- Choose a post-processing action from the floating panel, or insert the direct transcript
+- Choose a post-processing action from the caret bubble, or insert the direct transcript
 - Switch to Push to Talk in Settings if you prefer hold-to-record behavior
 - The floating island at the top of the screen shows a live waveform while recording and a spinner while transcribing
 
@@ -90,13 +90,15 @@ Removes the app, preferences, caches, permissions, and login item:
 
 - **Handsfree recording** — default `fn` key starts/stops recording, with Push to Talk still available in Settings
 - **Mic capture** — `16kHz`, `16-bit`, mono PCM via `AVAudioEngine`
-- **Gemini transcription** — `gemini-3.1-flash-lite` auto-detects the spoken language and returns a direct transcript first
-- **Interactive post-processing** — clean up, translate, compact, add emoji, make casual, make formal, make technical, or run a custom prompt before insertion
+- **Gemini transcription** — `gemini-2.5-flash-lite` by default, with `gemini-3.1-flash-lite` selectable in Settings; both auto-detect the spoken language and return a direct transcript first
+- **Interactive post-processing bubble** — clean up, translate, compact, add emoji, make casual, make formal, make technical, or run a custom prompt before insertion
 - **Review loop** — chain multiple post-processing actions, undo the last rewrite, and only auto-insert when the checkbox is enabled
+- **Copy and Insert** — final text is copied to the clipboard and inserted, so manual paste is available if insertion fails
+- **Post-processing bypass** — turn off the floating panel in Settings to copy and insert the direct transcript immediately
 - **Favorite translations** — configure two favorite target languages for one-click translation, with a full language picker still available
 - **Saved custom prompts** — define reusable post-processing prompts in Settings or save one from the floating panel
 - **Floating recording island** — live animated waveform while recording, spinner while transcribing
-- **Text insertion** — Accessibility API first (`AXUIElement`), clipboard + simulated paste fallback (original clipboard restored)
+- **Text insertion** — Accessibility API first (`AXUIElement`), clipboard + simulated paste fallback
 - **Translation language selector** — all major target languages with country flags for translation modes
 - **Fn key conflict detection** — warns in Settings if the fn key is assigned to a system function
 - **First-run onboarding** — API key, shortcut, and permission checks on launch

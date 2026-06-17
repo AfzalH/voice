@@ -140,7 +140,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         tick = 0
         updateAnimatedIcon()
         animationTimer = Timer.scheduledTimer(
-            withTimeInterval: 0.12,
+            withTimeInterval: 0.18,
             repeats: true
         ) { [weak self] _ in
             Task { @MainActor in
@@ -179,7 +179,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let startX = (imgWidth - totalWidth) / 2
 
             for i in 0 ..< 3 {
-                let phase = CGFloat((tick + i) % 3) * 0.08
+                let phase = (sin(CGFloat(tick) * 0.45 + CGFloat(i) * 1.2) + 1) * 0.06
                 let normalized = min(max(CGFloat(level), 0.05), 1.0)
                 let barHeight = 4 + (normalized + phase) * 8 * multipliers[i]
                 let clampedHeight = min(max(barHeight, 3), 13)
@@ -211,9 +211,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func setupAppIcon() {
         let size = NSSize(width: 256, height: 256)
         let icon = NSImage(size: size, flipped: false) { rect in
-            // Blue rounded-rectangle background
-            NSColor.systemBlue.setFill()
-            NSBezierPath(roundedRect: rect, xRadius: 48, yRadius: 48).fill()
+            let backgroundPath = NSBezierPath(
+                roundedRect: rect,
+                xRadius: 48,
+                yRadius: 48
+            )
+            NSGraphicsContext.saveGraphicsState()
+            backgroundPath.addClip()
+            NSGradient(colors: [
+                .voiceDeepCamel,
+                .voiceCamel,
+                .voiceAlmondSilk,
+            ])?.draw(in: rect, angle: 135)
+            NSGraphicsContext.restoreGraphicsState()
 
             // White microphone symbol via SF Symbols
             let config = NSImage.SymbolConfiguration(

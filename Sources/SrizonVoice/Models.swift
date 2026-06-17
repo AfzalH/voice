@@ -215,6 +215,10 @@ enum LanguageOption: String, CaseIterable, Codable {
     var plainName: String {
         displayName.split(separator: " ", maxSplits: 1).dropFirst().first.map(String.init) ?? code
     }
+
+    var flag: String {
+        displayName.split(separator: " ", maxSplits: 1).first.map(String.init) ?? ""
+    }
 }
 
 // MARK: - HotKey
@@ -336,6 +340,24 @@ enum RecordingMode: String, CaseIterable, Codable {
     }
 }
 
+// MARK: - GeminiModel
+
+enum GeminiModel: String, CaseIterable, Codable {
+    case gemini31FlashLite = "gemini-3.1-flash-lite"
+    case gemini25FlashLite = "gemini-2.5-flash-lite"
+
+    static let defaultValue: GeminiModel = .gemini25FlashLite
+
+    var displayName: String {
+        switch self {
+        case .gemini31FlashLite: return "Gemini 3.1"
+        case .gemini25FlashLite: return "Gemini 2.5"
+        }
+    }
+
+    var modelID: String { rawValue }
+}
+
 // MARK: - TranscriptionOutputMode
 
 enum TranscriptionOutputMode: String, CaseIterable, Codable {
@@ -432,10 +454,12 @@ enum PostProcessingAction {
 final class UserSettings {
     private enum Key {
         static let apiKey              = "gemini.apiKey"
+        static let geminiModel         = "gemini.model"
         static let hotKey              = "app.hotKey"
         static let outputMode          = "dictation.outputMode"
         static let customPrompt        = "dictation.customPrompt"
         static let customPostPrompts   = "postProcessing.customPrompts"
+        static let postProcessingEnabled = "postProcessing.enabled"
         static let translationLanguage = "dictation.translationLanguage"
         static let favoriteTranslationLanguage1 = "postProcessing.favoriteTranslationLanguage1"
         static let favoriteTranslationLanguage2 = "postProcessing.favoriteTranslationLanguage2"
@@ -449,10 +473,12 @@ final class UserSettings {
     static let defaultHandsfreeSeconds = 60
 
     var apiKey = ""
+    var geminiModel: GeminiModel = .defaultValue
     var hotKey = HotKey.defaultValue
     var outputMode: TranscriptionOutputMode = .corrected
     var customPrompt: String = TranscriptionOutputMode.defaultCustomPrompt
     var customPostProcessingPrompts: [CustomPostProcessingPrompt] = []
+    var postProcessingEnabled = true
     var translationLanguage: LanguageOption = .english
     var favoriteTranslationLanguage1: LanguageOption = .english
     var favoriteTranslationLanguage2: LanguageOption = .german
@@ -462,6 +488,13 @@ final class UserSettings {
     func load() {
         let defaults = UserDefaults.standard
         apiKey = defaults.string(forKey: Key.apiKey) ?? ""
+        if let raw = defaults.string(forKey: Key.geminiModel),
+           let model = GeminiModel(rawValue: raw)
+        {
+            geminiModel = model
+        } else {
+            geminiModel = .defaultValue
+        }
 
         if let data = defaults.data(forKey: Key.hotKey),
            let decoded = try? JSONDecoder().decode(HotKey.self, from: data)
@@ -491,6 +524,9 @@ final class UserSettings {
             customPostProcessingPrompts = [
                 CustomPostProcessingPrompt(title: "Saved custom prompt", prompt: customPrompt)
             ]
+        }
+        if defaults.object(forKey: Key.postProcessingEnabled) != nil {
+            postProcessingEnabled = defaults.bool(forKey: Key.postProcessingEnabled)
         }
         if let raw = defaults.string(forKey: Key.translationLanguage),
            let option = LanguageOption(rawValue: raw)
@@ -522,12 +558,14 @@ final class UserSettings {
     func save() {
         let defaults = UserDefaults.standard
         defaults.set(apiKey, forKey: Key.apiKey)
+        defaults.set(geminiModel.rawValue, forKey: Key.geminiModel)
         defaults.set(outputMode.rawValue, forKey: Key.outputMode)
         defaults.set(customPrompt, forKey: Key.customPrompt)
         customPostProcessingPrompts = Self.normalizedCustomPostProcessingPrompts(customPostProcessingPrompts)
         if let data = try? JSONEncoder().encode(customPostProcessingPrompts) {
             defaults.set(data, forKey: Key.customPostPrompts)
         }
+        defaults.set(postProcessingEnabled, forKey: Key.postProcessingEnabled)
         defaults.set(translationLanguage.rawValue, forKey: Key.translationLanguage)
         defaults.set(favoriteTranslationLanguage1.rawValue, forKey: Key.favoriteTranslationLanguage1)
         defaults.set(favoriteTranslationLanguage2.rawValue, forKey: Key.favoriteTranslationLanguage2)

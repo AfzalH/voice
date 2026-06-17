@@ -64,7 +64,10 @@ final class RecordingIslandController: NSObject {
 
 final class RecordingIslandView: NSView {
     private var audioLevel: Float = 0.0
-    private var barCount = 30
+    private var smoothedLevel: Float = 0.12
+    private var animationPhase: CGFloat = 0
+    private var frameCounter = 0
+    private var barCount = 34
     private var barValues: [Float] = []
     private var displayLink: CVDisplayLink?
     private var isTranscribing = false
@@ -91,7 +94,7 @@ final class RecordingIslandView: NSView {
     }
 
     func updateLevel(_ level: Float) {
-        audioLevel = level
+        audioLevel = min(max(level, 0), 1)
     }
 
     func setTranscribing(_ transcribing: Bool) {
@@ -134,22 +137,29 @@ final class RecordingIslandView: NSView {
 
     private func animateBars() {
         guard !isTranscribing else { return }
+
+        frameCounter += 1
+        smoothedLevel = smoothedLevel * 0.92 + audioLevel * 0.08
+        animationPhase += 0.035
+
+        guard frameCounter % 3 == 0 else {
+            needsDisplay = true
+            return
+        }
+
+        let breath = (sin(animationPhase) + 1) * 0.5
+        let level = CGFloat(smoothedLevel)
+        let newValue = 0.14 + level * 0.62 + CGFloat(breath) * 0.08
         barValues.removeFirst()
-        
-        let baseLevel = audioLevel
-        let randomVariation = Float.random(in: -0.12...0.12)
-        let newValue = min(max(baseLevel + randomVariation, 0.10), 1.0)
-        barValues.append(newValue)
-        
+        barValues.append(Float(min(max(newValue, 0.12), 0.86)))
         needsDisplay = true
     }
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         
-        // Draw black pill background
         let pillPath = NSBezierPath(roundedRect: bounds, xRadius: bounds.height / 2, yRadius: bounds.height / 2)
-        NSColor.black.withAlphaComponent(0.85).setFill()
+        NSColor(hex: 0x1F2A2A, alpha: 0.94).setFill()
         pillPath.fill()
 
         if isTranscribing {
@@ -160,11 +170,10 @@ final class RecordingIslandView: NSView {
     }
 
     private func drawTranscribingState() {
-        let dots = String(repeating: ".", count: transcribingDots)
-        let text = "Transcribing\(dots)"
+        let text = "Transcribing"
         let attributes: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: 13, weight: .medium),
-            .foregroundColor: NSColor.white.withAlphaComponent(0.9),
+            .foregroundColor: NSColor(hex: 0xDCE9E9, alpha: 0.92),
         ]
         let attrString = NSAttributedString(string: text, attributes: attributes)
         let textSize = attrString.size()
@@ -178,8 +187,7 @@ final class RecordingIslandView: NSView {
         let indicatorY = (bounds.height - indicatorSize) / 2
         let indicatorRect = NSRect(x: indicatorX, y: indicatorY, width: indicatorSize, height: indicatorSize)
         
-        let purpleColor = NSColor(red: 0.60, green: 0.40, blue: 0.80, alpha: 0.9)
-        purpleColor.setStroke()
+        NSColor.voiceAlmondSilk.withAlphaComponent(0.94).setStroke()
         let arc = NSBezierPath()
         let center = NSPoint(x: indicatorRect.midX, y: indicatorRect.midY)
         let radius = indicatorSize / 2 - 1
@@ -190,21 +198,25 @@ final class RecordingIslandView: NSView {
     }
 
     private func drawWaveform() {
-        let waveformWidth = bounds.width - 24
-        let waveformHeight = bounds.height - 12
+        let waveformWidth = bounds.width - 28
+        let waveformHeight = bounds.height - 14
         let waveformY = (bounds.height - waveformHeight) / 2
-        let waveformRect = NSRect(x: 12, y: waveformY, width: waveformWidth, height: waveformHeight)
+        let waveformRect = NSRect(x: 14, y: waveformY, width: waveformWidth, height: waveformHeight)
         
         let barWidth = waveformRect.width / CGFloat(barCount)
         let spacing: CGFloat = 1.5
         
-        let coralColor = NSColor(red: 0.91, green: 0.40, blue: 0.40, alpha: 0.9)
-        let purpleColor = NSColor(red: 0.60, green: 0.40, blue: 0.80, alpha: 0.9)
-        let blueColor = NSColor(red: 0.40, green: 0.40, blue: 0.87, alpha: 0.9)
+        let mistColor = NSColor.voiceAzureMist.withAlphaComponent(0.94)
+        let silkColor = NSColor.voiceAlmondSilk.withAlphaComponent(0.96)
+        let camelColor = NSColor.voiceCamel.withAlphaComponent(0.94)
         
         for (index, value) in barValues.enumerated() {
+            let progress = CGFloat(index) / CGFloat(max(1, barCount - 1))
+            let drift = sin(animationPhase + progress * .pi * 2.0) * 0.09
+            let counterDrift = sin(animationPhase * 0.58 + progress * .pi * 4.0) * 0.035
+            let heightValue = min(max(CGFloat(value) + drift + counterDrift, 0.12), 0.9)
             let x = waveformRect.minX + CGFloat(index) * barWidth
-            let barHeight = CGFloat(value) * waveformRect.height
+            let barHeight = heightValue * waveformRect.height
             let y = waveformRect.minY + (waveformRect.height - barHeight) / 2
             
             let rect = CGRect(
@@ -214,31 +226,29 @@ final class RecordingIslandView: NSView {
                 height: barHeight
             )
             
-            let gradientPosition = CGFloat(index) / CGFloat(barCount - 1)
-            let barColor: NSColor
-            
-            if gradientPosition < 0.5 {
-                let t = gradientPosition * 2.0
-                barColor = NSColor(
-                    red: coralColor.redComponent * (1 - t) + purpleColor.redComponent * t,
-                    green: coralColor.greenComponent * (1 - t) + purpleColor.greenComponent * t,
-                    blue: coralColor.blueComponent * (1 - t) + purpleColor.blueComponent * t,
-                    alpha: 0.9
-                )
-            } else {
-                let t = (gradientPosition - 0.5) * 2.0
-                barColor = NSColor(
-                    red: purpleColor.redComponent * (1 - t) + blueColor.redComponent * t,
-                    green: purpleColor.greenComponent * (1 - t) + blueColor.greenComponent * t,
-                    blue: purpleColor.blueComponent * (1 - t) + blueColor.blueComponent * t,
-                    alpha: 0.9
-                )
-            }
+            let barColor = Self.color(at: progress, start: mistColor, middle: silkColor, end: camelColor)
             
             barColor.setFill()
             let path = NSBezierPath(roundedRect: rect, xRadius: 1, yRadius: 1)
             path.fill()
         }
+    }
+
+    private static func color(at progress: CGFloat, start: NSColor, middle: NSColor, end: NSColor) -> NSColor {
+        if progress < 0.5 {
+            return interpolate(from: start, to: middle, amount: progress * 2)
+        }
+        return interpolate(from: middle, to: end, amount: (progress - 0.5) * 2)
+    }
+
+    private static func interpolate(from start: NSColor, to end: NSColor, amount: CGFloat) -> NSColor {
+        let t = min(max(amount, 0), 1)
+        return NSColor(
+            red: start.redComponent * (1 - t) + end.redComponent * t,
+            green: start.greenComponent * (1 - t) + end.greenComponent * t,
+            blue: start.blueComponent * (1 - t) + end.blueComponent * t,
+            alpha: start.alphaComponent * (1 - t) + end.alphaComponent * t
+        )
     }
 }
 
@@ -273,7 +283,8 @@ final class SettingsWindowManager: NSObject, NSWindowDelegate {
         let newWindow = NSWindow(contentViewController: hosting)
         newWindow.title = "SrizonVoice Settings"
         newWindow.styleMask = [.titled, .closable, .miniaturizable, .resizable]
-        newWindow.setContentSize(NSSize(width: 750, height: 550))
+        newWindow.setContentSize(NSSize(width: 780, height: 610))
+        newWindow.minSize = NSSize(width: 720, height: 520)
         newWindow.isReleasedWhenClosed = false
         newWindow.level = .normal
         newWindow.delegate = self
@@ -309,6 +320,11 @@ final class SettingsWindowManager: NSObject, NSWindowDelegate {
 
 // MARK: - PostProcessingPanelController
 
+final class PostProcessingBubblePanel: NSPanel {
+    override var canBecomeKey: Bool { true }
+    override var canBecomeMain: Bool { true }
+}
+
 @MainActor
 final class PostProcessingPanelController: NSObject, NSWindowDelegate {
     private var panel: NSPanel?
@@ -318,6 +334,7 @@ final class PostProcessingPanelController: NSObject, NSWindowDelegate {
     func show(
         transcript: String,
         targetAppName: String,
+        anchorPoint: NSPoint?,
         translationLanguage: LanguageOption,
         favoriteTranslationLanguages: [LanguageOption],
         customPrompts: [CustomPostProcessingPrompt],
@@ -347,26 +364,30 @@ final class PostProcessingPanelController: NSObject, NSWindowDelegate {
             hosting.sizingOptions = .intrinsicContentSize
         }
 
-        let newPanel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 540, height: 610),
-            styleMask: [.titled, .closable, .fullSizeContentView],
+        let newPanel = PostProcessingBubblePanel(
+            contentRect: NSRect(x: 0, y: 0, width: 662, height: 742),
+            styleMask: [.borderless, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
         newPanel.title = "Post-process Transcript"
-        newPanel.titleVisibility = .hidden
-        newPanel.titlebarAppearsTransparent = true
+        newPanel.isOpaque = false
+        newPanel.backgroundColor = .clear
+        newPanel.hasShadow = false
+        newPanel.isMovableByWindowBackground = true
         newPanel.isReleasedWhenClosed = false
-        newPanel.level = .floating
-        newPanel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        newPanel.level = .statusBar
+        newPanel.hidesOnDeactivate = false
+        newPanel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
         newPanel.contentViewController = hosting
         newPanel.delegate = self
-        position(newPanel)
+        position(newPanel, near: anchorPoint)
 
         panelModel = model
         panel = newPanel
         NSApp.activate(ignoringOtherApps: true)
         newPanel.makeKeyAndOrderFront(nil)
+        newPanel.orderFrontRegardless()
     }
 
     func hide() {
@@ -374,16 +395,33 @@ final class PostProcessingPanelController: NSObject, NSWindowDelegate {
         panel.close()
     }
 
-    private func position(_ panel: NSPanel) {
-        guard let screen = NSScreen.main ?? NSScreen.screens.first else {
+    private func position(_ panel: NSPanel, near anchorPoint: NSPoint?) {
+        guard let screen = screen(containing: anchorPoint) ?? NSScreen.main ?? NSScreen.screens.first else {
             panel.center()
             return
         }
         let frame = screen.visibleFrame
         let size = panel.frame.size
-        let x = frame.midX - size.width / 2
-        let y = frame.maxY - size.height - 70
-        panel.setFrameOrigin(NSPoint(x: x, y: max(frame.minY + 20, y)))
+        guard let anchorPoint else {
+            let x = frame.midX - size.width / 2
+            let y = frame.maxY - size.height - 70
+            panel.setFrameOrigin(NSPoint(x: x, y: max(frame.minY + 20, y)))
+            return
+        }
+
+        let padding: CGFloat = 14
+        let rightX = anchorPoint.x + 18
+        let leftX = anchorPoint.x - size.width - 18
+        let preferredX = rightX + size.width <= frame.maxX - padding ? rightX : leftX
+        let x = min(max(preferredX, frame.minX + padding), frame.maxX - size.width - padding)
+        let preferredY = anchorPoint.y - size.height + 48
+        let y = min(max(preferredY, frame.minY + padding), frame.maxY - size.height - padding)
+        panel.setFrameOrigin(NSPoint(x: x, y: y))
+    }
+
+    private func screen(containing point: NSPoint?) -> NSScreen? {
+        guard let point else { return nil }
+        return NSScreen.screens.first { $0.visibleFrame.contains(point) }
     }
 
     func windowWillClose(_ notification: Notification) {
@@ -526,24 +564,46 @@ final class PostProcessingPanelModel: ObservableObject {
 
 struct PostProcessingPanelView: View {
     @ObservedObject var model: PostProcessingPanelModel
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            header
-            currentTextEditor
-            quickActions
-            savedPrompts
-            customPromptEditor
-            footer
-        }
-        .padding(18)
-        .frame(width: 540, height: 610)
-        .disabled(model.isProcessing)
-        .overlay(alignment: .center) {
+        ZStack {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(VoiceTheme.raisedSurface)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .stroke(VoiceTheme.outlineVariant.opacity(0.78), lineWidth: 1)
+                )
+                .shadow(
+                    color: Color.black.opacity(colorScheme == .dark ? 0.50 : 0.18),
+                    radius: 22,
+                    x: 0,
+                    y: 14
+                )
+                .shadow(color: VoiceTheme.primary.opacity(colorScheme == .dark ? 0.12 : 0.10), radius: 7, x: 0, y: 2)
+
+            VStack(alignment: .leading, spacing: 14) {
+                header
+                currentTextEditor
+                quickActions
+                savedPrompts
+                customPromptEditor
+                footer
+            }
+            .padding(.horizontal, 18)
+            .padding(.top, 18)
+            .padding(.bottom, 18)
+
             if model.isProcessing {
                 processingOverlay
+                    .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
             }
         }
+        .padding(50)
+        .frame(width: 662, height: 742)
+        .foregroundStyle(VoiceTheme.onSurface)
+        .tint(VoiceTheme.primary)
+        .disabled(model.isProcessing)
     }
 
     private var header: some View {
@@ -553,7 +613,7 @@ struct PostProcessingPanelView: View {
                     .font(.title3.weight(.semibold))
                 Text(model.targetAppName)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(VoiceTheme.secondaryText)
             }
             Spacer()
             Toggle("Auto-insert", isOn: $model.autoInsertAfterProcessing)
@@ -566,21 +626,26 @@ struct PostProcessingPanelView: View {
             HStack {
                 Text("Current Text")
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(VoiceTheme.secondaryText)
                 Spacer()
                 Button {
                     model.undo()
                 } label: {
                     Label("Undo", systemImage: "arrow.uturn.backward")
                 }
+                .buttonStyle(VoiceQuietButtonStyle())
                 .disabled(!model.canUndo)
             }
             TextEditor(text: $model.currentText)
                 .font(.body)
                 .frame(height: 120)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(VoiceTheme.previewCanvas.opacity(colorScheme == .dark ? 0.44 : 0.40))
+                )
                 .overlay(
                     RoundedRectangle(cornerRadius: 8)
-                        .stroke(Color.secondary.opacity(0.25), lineWidth: 1)
+                        .stroke(VoiceTheme.outlineVariant.opacity(0.85), lineWidth: 1)
                 )
         }
     }
@@ -589,7 +654,7 @@ struct PostProcessingPanelView: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Actions")
                 .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(VoiceTheme.secondaryText)
             HStack(spacing: 8) {
                 actionButton("Clean up", systemImage: "wand.and.stars") {
                     model.run(.cleanUp)
@@ -614,7 +679,7 @@ struct PostProcessingPanelView: View {
             }
             HStack(spacing: 8) {
                 ForEach(Array(model.favoriteTranslationLanguages.prefix(2).enumerated()), id: \.offset) { _, language in
-                    actionButton("Translate to \(language.plainName)", systemImage: "globe") {
+                    translationButton(language) {
                         model.run(.translate(language))
                     }
                 }
@@ -629,8 +694,13 @@ struct PostProcessingPanelView: View {
                 Button {
                     model.run(.translate(model.selectedLanguage))
                 } label: {
-                    Label("Translate Selected", systemImage: "globe")
+                    HStack(spacing: 8) {
+                        Text(model.selectedLanguage.flag)
+                        Text("Translate Selected")
+                    }
+                    .frame(maxWidth: .infinity)
                 }
+                .buttonStyle(VoiceSoftButtonStyle())
             }
         }
     }
@@ -641,13 +711,14 @@ struct PostProcessingPanelView: View {
             VStack(alignment: .leading, spacing: 8) {
                 Text("Saved Prompts")
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(VoiceTheme.secondaryText)
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
                         ForEach(model.customPrompts) { prompt in
                             Button(prompt.title) {
                                 model.run(.custom(title: prompt.title, prompt: prompt.prompt))
                             }
+                            .buttonStyle(VoicePillButtonStyle())
                         }
                     }
                 }
@@ -659,14 +730,18 @@ struct PostProcessingPanelView: View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Custom Prompt")
                 .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(VoiceTheme.secondaryText)
             TextField("Prompt name", text: $model.customPromptTitle)
             TextEditor(text: $model.customPromptBody)
                 .font(.system(.body, design: .monospaced))
                 .frame(height: 88)
+                .background(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(VoiceTheme.surface.opacity(colorScheme == .dark ? 0.44 : 0.74))
+                )
                 .overlay(
                     RoundedRectangle(cornerRadius: 6)
-                        .stroke(Color.secondary.opacity(0.25), lineWidth: 1)
+                        .stroke(VoiceTheme.outlineVariant.opacity(0.85), lineWidth: 1)
                 )
             HStack {
                 Button {
@@ -674,6 +749,7 @@ struct PostProcessingPanelView: View {
                 } label: {
                     Label("Save Prompt", systemImage: "plus")
                 }
+                .buttonStyle(VoiceQuietButtonStyle())
                 .disabled(!model.canRunCustomPrompt)
 
                 Spacer()
@@ -683,7 +759,7 @@ struct PostProcessingPanelView: View {
                 } label: {
                     Label("Run Custom", systemImage: "play.fill")
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(VoicePrimaryButtonStyle())
                 .disabled(!model.canRunCustomPrompt)
             }
         }
@@ -694,26 +770,39 @@ struct PostProcessingPanelView: View {
             if let errorMessage = model.errorMessage {
                 Text(errorMessage)
                     .font(.caption)
-                    .foregroundStyle(.red)
+                    .foregroundStyle(VoiceTheme.error)
                     .lineLimit(2)
             }
             Spacer()
             Button("Cancel") {
                 model.cancel()
             }
+            .buttonStyle(VoiceQuietButtonStyle())
             Button {
                 model.insertCurrentText()
             } label: {
-                Label("Insert Transcript", systemImage: "text.insert")
+                Label("Copy and Insert", systemImage: "doc.on.clipboard")
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(VoicePrimaryButtonStyle())
             .keyboardShortcut(.return, modifiers: [.command])
+
+            shortcutKeycap
         }
+    }
+
+    private var shortcutKeycap: some View {
+        HStack(spacing: 4) {
+            Text("⌘ Return")
+                .font(.caption.weight(.semibold))
+        }
+        .foregroundStyle(VoiceTheme.secondaryText)
+        .padding(.leading, 2)
+        .accessibilityLabel("Command Return")
     }
 
     private var processingOverlay: some View {
         ZStack {
-            Color.black.opacity(0.16)
+            Color.black.opacity(colorScheme == .dark ? 0.28 : 0.14)
             VStack(spacing: 10) {
                 ProgressView()
                     .controlSize(.regular)
@@ -723,8 +812,8 @@ struct PostProcessingPanelView: View {
             .padding(18)
             .background(
                 RoundedRectangle(cornerRadius: 8)
-                    .fill(Color(nsColor: .windowBackgroundColor))
-                    .shadow(radius: 14)
+                    .fill(VoiceTheme.raisedSurface)
+                    .shadow(color: Color.black.opacity(0.18), radius: 14, x: 0, y: 8)
             )
         }
     }
@@ -738,5 +827,20 @@ struct PostProcessingPanelView: View {
             Label(title, systemImage: systemImage)
                 .frame(maxWidth: .infinity)
         }
+        .buttonStyle(VoiceSoftButtonStyle())
+    }
+
+    private func translationButton(
+        _ language: LanguageOption,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Text(language.flag)
+                Text("Translate to \(language.plainName)")
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(VoiceSoftButtonStyle())
     }
 }

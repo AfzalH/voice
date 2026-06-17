@@ -33,15 +33,16 @@ User presses hotkey again
   → WAV sent to Gemini for direct transcription in the detected spoken language
   → Transcript returned
   → Island disappears
-  → Floating post-processing panel appears
+  → Caret-anchored post-processing bubble appears
 
 User chooses a post-processing action
   → Current panel text is optionally rewritten by Gemini
   → Previous text is saved for Undo
   → Updated text remains in the panel for further post-processing
 
-User clicks Insert Transcript
+User clicks Copy and Insert
   → Panel closes
+  → Final text copied to the clipboard
   → Final text inserted into the previously focused text area
 
 User presses Escape (while recording)
@@ -157,10 +158,10 @@ All multi-byte integers are little-endian, matching the WAV specification.
 
 ### GeminiTranscriptionClient
 
-Sends a `POST` request to Gemini's `generateContent` endpoint with the model `gemini-3.1-flash-lite`:
+Sends a `POST` request to Gemini's `generateContent` endpoint using the selected Settings model. The default is `gemini-2.5-flash-lite`; `gemini-3.1-flash-lite` is also available:
 
 ```
-POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent
+POST https://generativelanguage.googleapis.com/v1beta/models/{selected-flash-lite-model}:generateContent
 x-goog-api-key: {apiKey}
 Content-Type: application/json
 ```
@@ -198,7 +199,7 @@ After transcription, a floating panel shows the direct transcript as editable cu
 | Custom prompt | Applies a one-off or saved user-defined instruction |
 | Undo | Restores the previous text before the last successful post-processing action |
 
-Post-processing uses a text-only `generateContent` request against the current panel text, not always the original transcript. On success, the previous current text is pushed onto an undo stack and the processed text stays in the panel so the user can chain another action, such as translate first and compact second. The panel only closes and inserts automatically when the user has enabled the auto-insert checkbox; otherwise insertion is explicit via the prominent Insert Transcript button.
+Post-processing uses a text-only `generateContent` request against the current bubble text, not always the original transcript. On success, the previous current text is pushed onto an undo stack and the processed text stays in the bubble so the user can chain another action, such as translate first and compact second. The bubble is anchored near the focused caret captured before recording starts; if macOS cannot provide caret bounds, it falls back to a centered position near the top of the screen. It only closes and inserts automatically when the user has enabled the auto-insert checkbox; otherwise insertion is explicit via the prominent Copy and Insert button. That path also leaves the final text on the clipboard so the user can paste manually if target insertion fails.
 
 ### API Key Validation
 
@@ -279,6 +280,7 @@ All settings are stored in `UserDefaults.standard`:
 |---|---|---|
 | `gemini.apiKey` | String | `""` |
 | `app.hotKey` | JSON-encoded `HotKey` | Fn key |
+| `postProcessing.enabled` | Bool | `true` |
 | `postProcessing.customPrompts` | JSON-encoded `[CustomPostProcessingPrompt]` | `[]` |
 | `dictation.translationLanguage` | String (ISO code) | `"en"` |
 | `postProcessing.favoriteTranslationLanguage1` | String (ISO code) | `"en"` |
@@ -363,5 +365,5 @@ Errors are surfaced as a brief message in the menu bar popover. Most auto-dismis
 | Empty recording (silence only) | Silent return — no error, no API call |
 | Gemini API 401/403 | "Invalid API key. Check Settings." |
 | Gemini API other error | Server error message shown verbatim |
-| Text insertion failed | "Unable to insert text in current app." |
+| Text insertion failed | Final text remains on the clipboard and an insertion failure message is shown |
 | Audio format error | "Could not configure audio capture." |

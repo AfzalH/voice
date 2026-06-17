@@ -11,16 +11,16 @@ struct MenuBarContentView: View {
             if model.isDictating {
                 HStack {
                     Image(systemName: "mic.fill")
-                        .foregroundStyle(.red)
+                        .foregroundStyle(VoiceTheme.error)
                     Text("Recording...")
                     Spacer()
                     if model.settings.recordingMode == .pushToTalk {
                         Text("Release \(model.settings.hotKey.displayString) to stop")
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(VoiceTheme.secondaryText)
                             .font(.caption)
                     } else {
                         Text("Press \(model.settings.hotKey.displayString) or esc to stop")
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(VoiceTheme.secondaryText)
                             .font(.caption)
                     }
                 }
@@ -29,14 +29,14 @@ struct MenuBarContentView: View {
                     ProgressView()
                         .controlSize(.small)
                     Text("Transcribing...")
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(VoiceTheme.secondaryText)
                 }
             } else if model.isPostProcessing {
                 HStack {
                     Image(systemName: "wand.and.stars")
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(VoiceTheme.primary)
                     Text("Post-processing...")
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(VoiceTheme.secondaryText)
                     Spacer()
                 }
             } else {
@@ -50,15 +50,6 @@ struct MenuBarContentView: View {
                 }
             }
 
-            Picker("Translate to", selection: Binding(
-                get: { model.settings.translationLanguage },
-                set: { model.switchTranslationLanguage($0) }
-            )) {
-                ForEach(LanguageOption.allCases, id: \.self) { language in
-                    Text(language.displayName).tag(language)
-                }
-            }
-
             Toggle("Handsfree Mode", isOn: Binding(
                 get: { model.settings.recordingMode == .handsfree },
                 set: { _ in model.toggleRecordingMode() }
@@ -69,22 +60,34 @@ struct MenuBarContentView: View {
             if let error = model.errorMessage {
                 Text(error)
                     .font(.caption)
-                    .foregroundStyle(.red)
+                    .foregroundStyle(VoiceTheme.error)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
             Divider()
+                .overlay(VoiceTheme.outlineVariant.opacity(0.8))
 
-            Button("Settings") {
+            Button {
                 model.presentSettingsWindow()
+            } label: {
+                Label("Settings", systemImage: "gearshape")
+                    .frame(maxWidth: .infinity)
             }
+            .buttonStyle(VoiceQuietButtonStyle())
 
-            Button("Quit") {
+            Button {
                 NSApp.terminate(nil)
+            } label: {
+                Label("Quit", systemImage: "power")
+                    .frame(maxWidth: .infinity)
             }
+            .buttonStyle(VoiceQuietButtonStyle())
         }
         .padding(12)
         .frame(width: 280)
+        .foregroundStyle(VoiceTheme.onSurface)
+        .tint(VoiceTheme.primary)
+        .background(VoiceTheme.background)
     }
 }
 
@@ -122,11 +125,16 @@ private struct SettingsCard<Content: View>: View {
 
     var body: some View {
         content
-            .padding(14)
+            .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
                 RoundedRectangle(cornerRadius: 8)
-                    .fill(Color(nsColor: .controlBackgroundColor))
+                    .fill(VoiceTheme.raisedSurface)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(VoiceTheme.outlineVariant.opacity(0.68), lineWidth: 1)
+                    )
+                    .shadow(color: Color.black.opacity(0.05), radius: 6, x: 0, y: 2)
             )
     }
 }
@@ -144,7 +152,7 @@ private struct SettingsCardHeader: View {
             if let subtitle {
                 Text(subtitle)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(VoiceTheme.secondaryText)
             }
         }
     }
@@ -156,7 +164,9 @@ struct SettingsView: View {
     @ObservedObject var model: AppModel
     @State private var selectedTab: SettingsTab = .general
     @State private var apiKey: String = ""
+    @State private var geminiModel: GeminiModel = .defaultValue
     @State private var hotKey = HotKey.defaultValue
+    @State private var postProcessingEnabled = true
     @State private var translationLanguage = LanguageOption.english
     @State private var favoriteTranslationLanguage1 = LanguageOption.english
     @State private var favoriteTranslationLanguage2 = LanguageOption.german
@@ -172,6 +182,14 @@ struct SettingsView: View {
         (model.hasMicrophonePermission ? 1 : 0)
         + (model.hasAccessibilityPermission ? 1 : 0)
         + (model.hasInputMonitoringPermission ? 1 : 0)
+    }
+
+    private var visibleSettingsTabs: [SettingsTab] {
+        allPermissionsGranted ? SettingsTab.allCases : [.general]
+    }
+
+    private var activeTab: SettingsTab {
+        allPermissionsGranted ? selectedTab : .general
     }
 
     private var fnKeyConflict: String? {
@@ -192,12 +210,12 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text("SETTINGS")
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(VoiceTheme.secondaryText)
                     .padding(.horizontal, 12)
                     .padding(.top, 12)
                     .padding(.bottom, 4)
 
-                ForEach(SettingsTab.allCases) { tab in
+                ForEach(visibleSettingsTabs) { tab in
                     Button(action: { selectedTab = tab }) {
                         HStack(spacing: 8) {
                             Image(systemName: tab.icon)
@@ -209,11 +227,11 @@ struct SettingsView: View {
                         .padding(.horizontal, 10)
                         .background(
                             RoundedRectangle(cornerRadius: 6)
-                                .fill(selectedTab == tab
-                                      ? Color.accentColor.opacity(0.15)
+                                .fill(activeTab == tab
+                                      ? VoiceTheme.primaryContainer.opacity(0.62)
                                       : Color.clear)
                         )
-                        .foregroundStyle(selectedTab == tab ? Color.accentColor : .primary)
+                        .foregroundStyle(activeTab == tab ? VoiceTheme.primary : VoiceTheme.onSurface)
                     }
                     .buttonStyle(.plain)
                     .padding(.horizontal, 8)
@@ -222,47 +240,49 @@ struct SettingsView: View {
                 Spacer()
             }
             .frame(width: 180)
-            .background(Color(nsColor: .windowBackgroundColor))
+            .background(VoiceTheme.surface)
 
             Divider()
+                .overlay(VoiceTheme.outlineVariant.opacity(0.8))
 
             // Content area
             VStack(spacing: 0) {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 16) {
-                        switch selectedTab {
+                    VStack(alignment: .leading, spacing: 12) {
+                        switch activeTab {
                         case .general:
                             generalPanel
                         case .transcription:
                             transcriptionPanel
                         }
                     }
-                    .padding(24)
+                    .padding(18)
                 }
 
                 Divider()
+                    .overlay(VoiceTheme.outlineVariant.opacity(0.8))
 
                 // Save footer
                 HStack {
                     if !allPermissionsGranted {
                         Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.yellow)
+                            .foregroundStyle(VoiceTheme.warning)
                         Text("All permissions must be granted before you can use SrizonVoice.")
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(VoiceTheme.secondaryText)
                             .fixedSize(horizontal: false, vertical: true)
                     } else if model.isValidatingKey {
                         ProgressView()
                             .controlSize(.small)
                         Text("Validating key...")
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(VoiceTheme.secondaryText)
                     } else if let error = model.errorMessage {
                         Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.red)
+                            .foregroundStyle(VoiceTheme.error)
                         Text(error)
                             .font(.caption)
-                            .foregroundStyle(.red)
+                            .foregroundStyle(VoiceTheme.error)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     Spacer()
@@ -270,7 +290,9 @@ struct SettingsView: View {
                         Button("Save") {
                             model.validateAndSaveAPIKey(
                                 apiKey,
+                                geminiModel: geminiModel,
                                 hotKey: hotKey,
+                                postProcessingEnabled: postProcessingEnabled,
                                 translationLanguage: translationLanguage,
                                 favoriteTranslationLanguage1: favoriteTranslationLanguage1,
                                 favoriteTranslationLanguage2: favoriteTranslationLanguage2,
@@ -279,11 +301,14 @@ struct SettingsView: View {
                                 handsfreeMaxSeconds: Int(handsfreeMaxSeconds)
                             ) { _ in }
                         }
+                        .buttonStyle(VoiceQuietButtonStyle())
                         .disabled(model.isValidatingKey)
                         Button("Save & Close") {
                             model.validateAndSaveAPIKey(
                                 apiKey,
+                                geminiModel: geminiModel,
                                 hotKey: hotKey,
+                                postProcessingEnabled: postProcessingEnabled,
                                 translationLanguage: translationLanguage,
                                 favoriteTranslationLanguage1: favoriteTranslationLanguage1,
                                 favoriteTranslationLanguage2: favoriteTranslationLanguage2,
@@ -296,23 +321,29 @@ struct SettingsView: View {
                                 }
                             }
                         }
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(VoicePrimaryButtonStyle())
                         .disabled(model.isValidatingKey)
                     } else {
                         Button("Grant Permissions (\(permissionsGrantedCount) of 3 given)") {
                             model.requestPermissions()
                         }
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(VoicePrimaryButtonStyle())
                     }
                 }
                 .padding(.horizontal, 24)
                 .padding(.vertical, 12)
+                .background(VoiceTheme.surface)
             }
         }
-        .frame(width: 750, height: 550)
+        .frame(width: 780, height: 610)
+        .foregroundStyle(VoiceTheme.onSurface)
+        .tint(VoiceTheme.primary)
+        .background(VoiceTheme.background)
         .onAppear {
             apiKey = model.settings.apiKey
+            geminiModel = model.settings.geminiModel
             hotKey = model.settings.hotKey
+            postProcessingEnabled = model.settings.postProcessingEnabled
             translationLanguage = model.settings.translationLanguage
             favoriteTranslationLanguage1 = model.settings.favoriteTranslationLanguage1
             favoriteTranslationLanguage2 = model.settings.favoriteTranslationLanguage2
@@ -328,13 +359,27 @@ struct SettingsView: View {
 
     @ViewBuilder
     private var generalPanel: some View {
+        permissionsCard
+
+        if allPermissionsGranted {
+            apiKeyCard
+            shortcutCard
+            recordingModeCard
+        }
+    }
+
+    private var apiKeyCard: some View {
         SettingsCard {
-            VStack(alignment: .leading, spacing: 10) {
-                SettingsCardHeader(title: "API Key", subtitle: "Your Gemini API key for transcription and translation")
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .top, spacing: 12) {
+                    SettingsCardHeader(title: "API Key", subtitle: "Your Gemini API key for transcription and translation")
+                    Spacer()
+                    GeminiModelSelector(selection: $geminiModel)
+                }
                 SecureField("Gemini API Key", text: $apiKey)
                     .overlay(
                         RoundedRectangle(cornerRadius: 4)
-                            .stroke(Color.red, lineWidth: allPermissionsGranted && apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 1.5 : 0)
+                            .stroke(VoiceTheme.error, lineWidth: allPermissionsGranted && apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 1.5 : 0)
                     )
                     .onChange(of: apiKey) { _ in
                         model.errorMessage = nil
@@ -343,18 +388,20 @@ struct SettingsView: View {
                     .font(.caption)
             }
         }
+    }
 
+    private var shortcutCard: some View {
         SettingsCard {
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 8) {
                 SettingsCardHeader(title: "Shortcut", subtitle: recordingMode == .pushToTalk ? "Hold to dictate, release to insert text" : "Press to start/stop recording")
                 HotKeyRecorderField(hotKey: $hotKey)
                 Text("Suggested hotkeys: fn, ⌃⌥, ⌥⌘")
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(VoiceTheme.secondaryText)
                 if let conflict = fnKeyConflict {
                     HStack(alignment: .top, spacing: 6) {
                         Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.yellow)
+                            .foregroundStyle(VoiceTheme.warning)
                             .font(.caption)
                         Text("The fn key is assigned to \"\(conflict)\" in System Settings and may not work as a shortcut. Choose a different key, or change the fn key assignment in **System Settings › Keyboard**.")
                             .font(.caption)
@@ -364,54 +411,49 @@ struct SettingsView: View {
                 }
             }
         }
+    }
 
+    private var recordingModeCard: some View {
         SettingsCard {
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 8) {
                 SettingsCardHeader(title: "Recording Mode", subtitle: "How the shortcut triggers recording")
-                Picker("Mode", selection: $recordingMode) {
-                    ForEach(RecordingMode.allCases, id: \.self) { mode in
-                        Text(mode.displayName).tag(mode)
-                    }
-                }
-                .pickerStyle(.radioGroup)
-                .labelsHidden()
+                RecordingModeSelector(selection: $recordingMode)
 
                 if recordingMode == .handsfree {
-                    HStack(alignment: .firstTextBaseline) {
-                        Text("Auto-stop after")
+                    HStack(spacing: 12) {
+                        Text("Auto-stop")
+                            .font(.callout)
                         Text(Self.handsfreeDurationLabel(Int(handsfreeMaxSeconds)))
                             .fontWeight(.semibold)
+                            .frame(width: 80, alignment: .leading)
+                        Slider(
+                            value: $handsfreeMaxSeconds,
+                            in: Double(UserSettings.minHandsfreeSeconds)...Double(UserSettings.maxHandsfreeSeconds),
+                            step: 30
+                        )
                     }
-                    .font(.callout)
-                    Slider(
-                        value: $handsfreeMaxSeconds,
-                        in: Double(UserSettings.minHandsfreeSeconds)...Double(UserSettings.maxHandsfreeSeconds),
-                        step: 30
-                    )
                     Text("Recording stops automatically after this duration, or press the shortcut / Esc to stop early.")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(VoiceTheme.secondaryText)
                 }
             }
         }
+    }
 
+    private var permissionsCard: some View {
         SettingsCard {
-            VStack(alignment: .leading, spacing: 10) {
-                SettingsCardHeader(title: "Permissions", subtitle: allPermissionsGranted ? nil : "All permissions are required to use SrizonVoice")
-                PermissionRow(title: "Microphone", granted: model.hasMicrophonePermission)
-                PermissionRow(title: "Accessibility", granted: model.hasAccessibilityPermission)
-                HStack {
-                    PermissionRow(
-                        title: model.hasInputMonitoringPermission
-                            ? "Input Monitoring"
-                            : "Input Monitoring (restart app to detect changes)",
-                        granted: model.hasInputMonitoringPermission
-                    )
+            VStack(alignment: .leading, spacing: 8) {
+                SettingsCardHeader(title: "Permissions", subtitle: allPermissionsGranted ? "Ready for API key and shortcut setup" : "Grant all permissions to continue setup")
+                HStack(spacing: 16) {
+                    PermissionRow(title: "Microphone", granted: model.hasMicrophonePermission)
+                    PermissionRow(title: "Accessibility", granted: model.hasAccessibilityPermission)
+                    PermissionRow(title: "Input Monitoring", granted: model.hasInputMonitoringPermission)
+                    Spacer()
                     if !model.hasInputMonitoringPermission {
-                        Spacer()
                         Button("Restart App") {
                             Self.restartApp()
                         }
+                        .buttonStyle(VoiceQuietButtonStyle())
                         .controlSize(.small)
                     }
                 }
@@ -449,6 +491,14 @@ struct SettingsView: View {
     private var transcriptionPanel: some View {
         SettingsCard {
             VStack(alignment: .leading, spacing: 10) {
+                SettingsCardHeader(title: "Post-processing", subtitle: "When off, transcripts are copied and inserted immediately")
+                Toggle("Show post-processing panel after transcription", isOn: $postProcessingEnabled)
+                    .toggleStyle(.checkbox)
+            }
+        }
+
+        SettingsCard {
+            VStack(alignment: .leading, spacing: 10) {
                 SettingsCardHeader(title: "Translation", subtitle: "Used by the floating post-processing panel")
                 Picker("Default chooser language", selection: $translationLanguage) {
                     ForEach(LanguageOption.allCases, id: \.self) { option in
@@ -481,12 +531,13 @@ struct SettingsView: View {
                     } label: {
                         Label("Add", systemImage: "plus")
                     }
+                    .buttonStyle(VoiceQuietButtonStyle())
                 }
 
                 if customPrompts.isEmpty {
                     Text("No custom prompts saved.")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(VoiceTheme.secondaryText)
                 } else {
                     ForEach($customPrompts) { $prompt in
                         VStack(alignment: .leading, spacing: 8) {
@@ -496,6 +547,7 @@ struct SettingsView: View {
                                     deleteCustomPrompt(prompt.id)
                                 } label: {
                                     Image(systemName: "trash")
+                                        .foregroundStyle(VoiceTheme.error)
                                 }
                                 .buttonStyle(.borderless)
                             }
@@ -504,7 +556,7 @@ struct SettingsView: View {
                                 .frame(minHeight: 90)
                                 .overlay(
                                     RoundedRectangle(cornerRadius: 4)
-                                        .stroke(Color.secondary.opacity(0.3), lineWidth: 1)
+                                        .stroke(VoiceTheme.outlineVariant.opacity(0.85), lineWidth: 1)
                                 )
                         }
                         .padding(.vertical, 6)
@@ -519,6 +571,78 @@ struct SettingsView: View {
     }
 }
 
+// MARK: - GeminiModelSelector
+
+private struct GeminiModelSelector: View {
+    @Binding var selection: GeminiModel
+
+    var body: some View {
+        HStack(spacing: 8) {
+            ForEach(GeminiModel.allCases, id: \.self) { model in
+                Button {
+                    selection = model
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: selection == model ? "checkmark.square.fill" : "square")
+                            .foregroundStyle(selection == model ? VoiceTheme.primary : VoiceTheme.secondaryText)
+                        Text(model.displayName)
+                            .font(.caption.weight(.semibold))
+                    }
+                    .padding(.horizontal, 8)
+                    .frame(height: 28)
+                    .background(
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .fill(selection == model ? VoiceTheme.primaryContainer.opacity(0.52) : VoiceTheme.surfaceVariant.opacity(0.32))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            .stroke(selection == model ? VoiceTheme.primary.opacity(0.42) : VoiceTheme.outlineVariant.opacity(0.62), lineWidth: 1)
+                    )
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(selection == model ? .isSelected : [])
+                .accessibilityLabel(model.displayName)
+            }
+        }
+    }
+}
+
+// MARK: - RecordingModeSelector
+
+private struct RecordingModeSelector: View {
+    @Binding var selection: RecordingMode
+
+    var body: some View {
+        HStack(spacing: 8) {
+            ForEach(RecordingMode.allCases, id: \.self) { mode in
+                Button {
+                    selection = mode
+                } label: {
+                    HStack(spacing: 7) {
+                        Image(systemName: selection == mode ? "record.circle.fill" : "circle")
+                            .foregroundStyle(selection == mode ? VoiceTheme.primary : VoiceTheme.secondaryText)
+                        Text(mode.displayName)
+                            .font(.callout.weight(.medium))
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.horizontal, 10)
+                    .frame(maxWidth: .infinity, minHeight: 34)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(selection == mode ? VoiceTheme.primaryContainer.opacity(0.58) : VoiceTheme.surfaceVariant.opacity(0.36))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .stroke(selection == mode ? VoiceTheme.primary.opacity(0.46) : VoiceTheme.outlineVariant.opacity(0.70), lineWidth: 1)
+                    )
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(selection == mode ? .isSelected : [])
+            }
+        }
+    }
+}
+
 // MARK: - PermissionRow
 
 struct PermissionRow: View {
@@ -528,7 +652,7 @@ struct PermissionRow: View {
     var body: some View {
         HStack {
             Image(systemName: granted ? "checkmark.circle.fill" : "xmark.circle")
-                .foregroundStyle(granted ? .green : .secondary)
+                .foregroundStyle(granted ? VoiceTheme.success : VoiceTheme.secondaryText)
             Text(title)
         }
     }

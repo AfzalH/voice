@@ -165,6 +165,7 @@ final class DictationCoordinator {
         do {
             let transcript = try await transcriptionClient.transcribe(
                 apiKey: settings.apiKey,
+                model: settings.geminiModel,
                 audioData: wavData,
                 targetAppName: targetAppName
             )
@@ -301,7 +302,6 @@ final class GeminiTranscriptionClient {
         let mimeType: String
     }
 
-    private static let model = "gemini-3.1-flash-lite"
     private static let inlineAudioLimitBytes = 14 * 1024 * 1024
 
     private let session = URLSession(configuration: .default)
@@ -309,6 +309,7 @@ final class GeminiTranscriptionClient {
     /// Sends audio to Gemini and returns a direct transcript in the detected spoken language.
     func transcribe(
         apiKey: String,
+        model: GeminiModel,
         audioData: Data,
         targetAppName: String
     ) async throws -> String {
@@ -321,7 +322,7 @@ final class GeminiTranscriptionClient {
                     "data": audioData.base64EncodedString()
                 ]
             ]
-            return try await generateContent(apiKey: apiKey, prompt: prompt, audioPart: audioPart)
+            return try await generateContent(apiKey: apiKey, model: model, prompt: prompt, audioPart: audioPart)
         }
 
         let uploadedFile = try await uploadAudio(apiKey: apiKey, audioData: audioData)
@@ -331,7 +332,7 @@ final class GeminiTranscriptionClient {
                 "file_uri": uploadedFile.uri
             ]
         ]
-        return try await generateContent(apiKey: apiKey, prompt: prompt, audioPart: audioPart)
+        return try await generateContent(apiKey: apiKey, model: model, prompt: prompt, audioPart: audioPart)
     }
 
     /// Validates a Gemini API key by listing available models.
@@ -353,10 +354,11 @@ final class GeminiTranscriptionClient {
 
     private func generateContent(
         apiKey: String,
+        model: GeminiModel,
         prompt: String,
         audioPart: [String: Any]
     ) async throws -> String {
-        guard let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(Self.model):generateContent") else {
+        guard let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(model.modelID):generateContent") else {
             throw DictationError.invalidURL
         }
 
@@ -483,17 +485,16 @@ final class GeminiTranscriptionClient {
 // MARK: - GeminiPostProcessingClient
 
 final class GeminiPostProcessingClient {
-    private static let model = "gemini-3.1-flash-lite"
-
     private let session = URLSession(configuration: .default)
 
     func process(
         apiKey: String,
+        model: GeminiModel,
         transcript: String,
         action: PostProcessingAction,
         targetAppName: String
     ) async throws -> String {
-        guard let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(Self.model):generateContent") else {
+        guard let url = URL(string: "https://generativelanguage.googleapis.com/v1beta/models/\(model.modelID):generateContent") else {
             throw DictationError.invalidURL
         }
 
@@ -578,6 +579,7 @@ struct TextInsertionTarget {
     let bundleID: String
     let processIdentifier: pid_t
     let focusedElement: AXUIElement?
+    let caretScreenPoint: NSPoint?
 }
 
 // MARK: - TextInsertionService
@@ -599,32 +601,47 @@ final class TextInsertionService {
             appName: app.localizedName ?? "Unknown App",
             bundleID: app.bundleIdentifier ?? "",
             processIdentifier: app.processIdentifier,
-            focusedElement: focusedElement
+            focusedElement: focusedElement,
+            caretScreenPoint: CaretPositionHelper.getFocusedCaretScreenPoint()
         )
     }
 
-    func insertText(_ text: String, into target: TextInsertionTarget? = nil) -> Bool {
+    func insertText(
+        _ text: String,
+        into target: TextInsertionTarget? = nil,
+        copyToClipboard: Bool = false
+    ) -> Bool {
+        if copyToClipboard {
+            copyTextToClipboard(text)
+        }
+
         // For rich-text apps and terminal emulators, prefer clipboard paste
         let app = NSWorkspace.shared.frontmostApplication
         let appName = target?.appName ?? app?.localizedName ?? ""
         let bundleID = target?.bundleID ?? app?.bundleIdentifier ?? ""
         if prefersClipboardPaste(appName: appName, bundleID: bundleID) {
             activateTargetIfNeeded(target)
-            return pasteWithClipboardFallback(text)
+            return pasteWithClipboardFallback(text, restoreClipboard: !copyToClipboard)
         }
 
         // Try Accessibility API first (works in most text fields)
         if insertWithAccessibility(text, into: target) {
+            if copyToClipboard {
+                copyTextToClipboard(text)
+            }
             return true
         }
 
         activateTargetIfNeeded(target)
         if insertWithAccessibility(text, into: target) {
+            if copyToClipboard {
+                copyTextToClipboard(text)
+            }
             return true
         }
 
         // Fall back to clipboard paste as universal method
-        return pasteWithClipboardFallback(text)
+        return pasteWithClipboardFallback(text, restoreClipboard: !copyToClipboard)
     }
 
     private func prefersClipboardPaste(appName: String, bundleID: String) -> Bool {
@@ -751,11 +768,17 @@ final class TextInsertionService {
 
     // MARK: - Clipboard Paste (for rich-text apps)
 
-    private func pasteWithClipboardFallback(_ text: String) -> Bool {
-        guard let savedClipboard = ClipboardSnapshot.capture() else { return false }
+    @discardableResult
+    private func copyTextToClipboard(_ text: String) -> Bool {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
-        pasteboard.setString(text, forType: .string)
+        return pasteboard.setString(text, forType: .string)
+    }
+
+    private func pasteWithClipboardFallback(_ text: String, restoreClipboard: Bool = true) -> Bool {
+        let savedClipboard = restoreClipboard ? ClipboardSnapshot.capture() : nil
+        if restoreClipboard, savedClipboard == nil { return false }
+        copyTextToClipboard(text)
 
         Thread.sleep(forTimeInterval: 0.05)
 
@@ -776,8 +799,10 @@ final class TextInsertionService {
         Thread.sleep(forTimeInterval: 0.02)
         cmdUp.post(tap: .cghidEventTap)
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            savedClipboard.restore()
+        if restoreClipboard, let savedClipboard {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                savedClipboard.restore()
+            }
         }
         return true
     }

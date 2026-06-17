@@ -13,6 +13,23 @@ echo "Cleaning up previous installation..."
 pkill -x SrizonVoice 2>/dev/null && echo "  Stopped running SrizonVoice" || true
 sleep 0.5
 
+# Reset TCC permissions before removing the bundle, so macOS can still
+# resolve the bundle identifier and clear stale code-signature grants.
+reset_tcc_permission() {
+    local service="$1"
+    local label="$2"
+    local output
+    if output=$(tccutil reset "$service" "$BUNDLE_ID" 2>&1); then
+        echo "  Reset $label permission"
+    else
+        echo "  Could not reset $label permission: $output"
+    fi
+}
+
+reset_tcc_permission Microphone "Microphone"
+reset_tcc_permission Accessibility "Accessibility"
+reset_tcc_permission ListenEvent "Input Monitoring"
+
 # Remove the installed app.
 rm -rf "$TARGET_PATH" && echo "  Removed $TARGET_PATH" || true
 
@@ -32,15 +49,6 @@ rm -rf ~/Library/Caches/${BUNDLE_ID}
 
 # Remove saved application state.
 rm -rf ~/Library/Saved\ Application\ State/${BUNDLE_ID}.savedState
-
-# Reset Accessibility TCC entry so the stale code-signature doesn't block
-# the newly-built binary.  The app will re-prompt on first launch.
-tccutil reset Accessibility "$BUNDLE_ID" 2>/dev/null \
-    && echo "  Reset Accessibility permission (stale signature cleared)" || true
-
-# Reset Input Monitoring (ListenEvent) TCC entry.
-tccutil reset ListenEvent "$BUNDLE_ID" 2>/dev/null \
-    && echo "  Reset Input Monitoring permission" || true
 
 # Remove Login Items entry.
 osascript -e 'tell application "System Events" to delete (login items whose name is "SrizonVoice")' 2>/dev/null \
