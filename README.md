@@ -8,7 +8,7 @@ SrizonVoice is free. You only pay Google Gemini API usage through your own API k
 
 ## Download
 
-Download the latest installer: [SrizonVoice-3.1.0.dmg](https://github.com/AfzalH/voice/releases/download/v3.1.0/SrizonVoice-3.1.0.dmg).
+Download the latest installer: [SrizonVoice-3.2.0.dmg](https://github.com/AfzalH/voice/releases/download/v3.2.0/SrizonVoice-3.2.0.dmg).
 
 Checksums and older builds are available on [GitHub Releases](https://github.com/AfzalH/voice/releases/latest).
 
@@ -27,8 +27,8 @@ Checksums and older builds are available on [GitHub Releases](https://github.com
 
 1. Get a Gemini API key from [aistudio.google.com](https://aistudio.google.com/apikey)
 2. Launch SrizonVoice — Settings opens automatically on first run
-3. Enter your Gemini API key and click Save
-4. Grant Microphone, Accessibility, and Input Monitoring permissions when prompted
+3. Grant Microphone, Accessibility, and Input Monitoring permissions
+4. Enter your Gemini API key, choose a model if needed, and click Save
 
 ## Usage
 
@@ -61,14 +61,14 @@ This produces `dist/SrizonVoice.app`.
 
 This produces:
 
-- `dist/SrizonVoice-3.1.0.dmg` — Installer disk image
-- `dist/SrizonVoice-3.1.0.sha256` — Checksum for verification
+- `dist/SrizonVoice-3.2.0.dmg` — Installer disk image
+- `dist/SrizonVoice-3.2.0.sha256` — Checksum for verification
 
 ## Install
 
 From DMG (recommended):
 
-1. Open `SrizonVoice-3.1.0.dmg`
+1. Open `SrizonVoice-3.2.0.dmg`
 2. Drag `SrizonVoice.app` to the `Applications` folder
 3. Launch from Applications or Spotlight
 

@@ -5,6 +5,25 @@ All notable changes to SrizonVoice will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.2.0] - 2026-06-17
+
+### Added
+- Added a vBoard-inspired visual theme across the post-processing bubble, settings window, menu popover, recording island, and app icon.
+- Added a Gemini model switcher in Settings with `gemini-2.5-flash-lite` as the default and `gemini-3.1-flash-lite` available.
+- Added a permission-first setup flow that reveals API key, shortcut, recording, and post-processing settings only after required macOS permissions are granted.
+- Added clipboard copy to Copy and Insert so final text is available for manual paste if insertion fails.
+
+### Changed
+- Reworked the post-processing UI into a persistent raised bubble near the focused caret.
+- Improved the recording waveform with calmer motion and the vBoard color palette.
+- Made post-processing insert explicit by default, with chainable actions, undo, and an optional auto-insert checkbox.
+- Moved translation out of the menu-bar popover and into post-processing, with favorite target-language buttons showing flags.
+- Made the settings window more compact and updated permission cleanup/install scripts.
+
+### Fixed
+- Fixed clipped post-processing bubble shadows and an overlay that could spill outside the panel.
+- Fixed transcribing text jitter by removing animated dots while keeping the spinner.
+
 ## [3.1.0] - 2026-06-16
 
 ### Added
@@ -97,6 +116,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CGEvent tap for global Esc key handling
 - SMAppService for launch-at-login registration
 
+[3.2.0]: https://github.com/AfzalH/voice/releases/tag/v3.2.0
 [3.1.0]: https://github.com/AfzalH/voice/releases/tag/v3.1.0
 [3.0.1]: https://github.com/AfzalH/voice/releases/tag/v3.0.1
 [3.0.0]: https://github.com/AfzalH/voice/releases/tag/v3.0.0
