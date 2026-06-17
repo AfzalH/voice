@@ -57,6 +57,13 @@ struct MenuBarContentView: View {
             .toggleStyle(.switch)
             .controlSize(.small)
 
+            Toggle("Post-processing", isOn: Binding(
+                get: { model.settings.postProcessingEnabled },
+                set: { _ in model.togglePostProcessing() }
+            ))
+            .toggleStyle(.switch)
+            .controlSize(.small)
+
             if let error = model.errorMessage {
                 Text(error)
                     .font(.caption)

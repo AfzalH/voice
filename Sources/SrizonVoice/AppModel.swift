@@ -104,6 +104,12 @@ final class AppModel: ObservableObject {
         saveSettings()
     }
 
+    func togglePostProcessing() {
+        objectWillChange.send()
+        settings.postProcessingEnabled.toggle()
+        saveSettings()
+    }
+
     @Published var hasMicrophonePermission = false
     @Published var hasAccessibilityPermission = false
     @Published var hasInputMonitoringPermission = false
@@ -372,7 +378,6 @@ final class AppModel: ObservableObject {
 
         postProcessingPanelController.show(
             transcript: trimmed,
-            targetAppName: targetAppName,
             anchorPoint: target?.caretScreenPoint,
             translationLanguage: initialLanguage,
             favoriteTranslationLanguages: favoriteLanguages,

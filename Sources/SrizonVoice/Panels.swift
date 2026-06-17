@@ -333,7 +333,6 @@ final class PostProcessingPanelController: NSObject, NSWindowDelegate {
 
     func show(
         transcript: String,
-        targetAppName: String,
         anchorPoint: NSPoint?,
         translationLanguage: LanguageOption,
         favoriteTranslationLanguages: [LanguageOption],
@@ -348,7 +347,6 @@ final class PostProcessingPanelController: NSObject, NSWindowDelegate {
 
         let model = PostProcessingPanelModel(
             transcript: transcript,
-            targetAppName: targetAppName,
             translationLanguage: translationLanguage,
             favoriteTranslationLanguages: favoriteTranslationLanguages,
             customPrompts: customPrompts,
@@ -443,7 +441,6 @@ final class PostProcessingPanelController: NSObject, NSWindowDelegate {
 @MainActor
 final class PostProcessingPanelModel: ObservableObject {
     let transcript: String
-    let targetAppName: String
 
     @Published var selectedLanguage: LanguageOption
     @Published var favoriteTranslationLanguages: [LanguageOption]
@@ -454,7 +451,6 @@ final class PostProcessingPanelModel: ObservableObject {
     @Published var errorMessage: String?
 
     @Published var currentText: String
-    @Published var autoInsertAfterProcessing = false
     @Published private var history: [String] = []
 
     private let processAction: (String, PostProcessingAction) async throws -> String
@@ -464,7 +460,6 @@ final class PostProcessingPanelModel: ObservableObject {
 
     init(
         transcript: String,
-        targetAppName: String,
         translationLanguage: LanguageOption,
         favoriteTranslationLanguages: [LanguageOption],
         customPrompts: [CustomPostProcessingPrompt],
@@ -474,7 +469,6 @@ final class PostProcessingPanelModel: ObservableObject {
         closePanel: @escaping () -> Void
     ) {
         self.transcript = transcript
-        self.targetAppName = targetAppName
         self.currentText = transcript
         self.selectedLanguage = translationLanguage
         self.favoriteTranslationLanguages = favoriteTranslationLanguages
@@ -532,9 +526,6 @@ final class PostProcessingPanelModel: ObservableObject {
                     }
                     self.history.append(self.currentText)
                     self.currentText = trimmed
-                    if self.autoInsertAfterProcessing {
-                        self.insertText(trimmed)
-                    }
                 }
             } catch {
                 await MainActor.run {
@@ -608,16 +599,9 @@ struct PostProcessingPanelView: View {
 
     private var header: some View {
         HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text("Post-process transcript")
-                    .font(.title3.weight(.semibold))
-                Text(model.targetAppName)
-                    .font(.caption)
-                    .foregroundStyle(VoiceTheme.secondaryText)
-            }
+            Text("Post-process transcript")
+                .font(.title3.weight(.semibold))
             Spacer()
-            Toggle("Auto-insert", isOn: $model.autoInsertAfterProcessing)
-                .toggleStyle(.checkbox)
         }
     }
 
