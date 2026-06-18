@@ -28,6 +28,11 @@ final class AppModel: ObservableObject {
     private var permissionPollTask: Task<Void, Never>?
     private var handsfreeAutoStopTask: Task<Void, Never>?
     private var pendingInsertionTarget: TextInsertionTarget?
+    /// True while `startDictation` is in its async startup (before recording begins).
+    private var isStartingDictation = false
+    /// Set when a stop is requested before async startup finishes, so the in-flight
+    /// start can abort instead of leaving recording stuck on after the key is released.
+    private var stopRequestedDuringStart = false
 
     init() {
         settings.load()
@@ -198,6 +203,7 @@ final class AppModel: ObservableObject {
     // MARK: - Private
 
     private func startDictation() {
+        guard !isStartingDictation else { return }
         if settings.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             showError("Add your Gemini API key in Settings.")
             return
@@ -210,10 +216,22 @@ final class AppModel: ObservableObject {
         }
         pendingInsertionTarget = insertionService.captureCurrentTarget()
 
+        isStartingDictation = true
+        stopRequestedDuringStart = false
         Task {
+            defer { isStartingDictation = false }
             let micGranted = await permissionManager.requestMicrophonePermission()
             guard micGranted else {
                 showError("Microphone permission is required.")
+                stopRequestedDuringStart = false
+                pendingInsertionTarget = nil
+                return
+            }
+            // A stop (key-up / Esc) may have arrived while we were still starting up.
+            // Honor it here instead of leaving recording stuck on after the key released.
+            guard !stopRequestedDuringStart else {
+                stopRequestedDuringStart = false
+                pendingInsertionTarget = nil
                 return
             }
             do {
@@ -230,7 +248,12 @@ final class AppModel: ObservableObject {
     }
 
     private func stopDictation() {
-        guard isDictating else { return }
+        guard isDictating else {
+            // The key was released (or Esc pressed) before async startup finished.
+            // Remember it so the pending start aborts instead of getting stuck on.
+            if isStartingDictation { stopRequestedDuringStart = true }
+            return
+        }
         cancelHandsfreeAutoStop()
         isDictating = false
         isTranscribing = true
