@@ -22,10 +22,12 @@ final class RecordingIslandController: NSObject {
             panel.setFrame(NSRect(x: x, y: y, width: width, height: height), display: true)
         }
         islandView?.setTranscribing(false)
+        islandView?.startAnimating()
         panel.orderFrontRegardless()
     }
 
     func hide() {
+        islandView?.stopAnimating()
         panel?.orderOut(nil)
     }
 
@@ -131,8 +133,23 @@ final class RecordingIslandView: NSView {
         
         let userInfo = Unmanaged.passUnretained(self).toOpaque()
         CVDisplayLinkSetOutputCallback(link, callback, userInfo)
-        CVDisplayLinkStart(link)
         self.displayLink = link
+    }
+
+    /// Starts the waveform animation. Called when the island becomes visible so the
+    /// display link isn't left running (and burning CPU) while idle in the menu bar.
+    func startAnimating() {
+        guard let displayLink, !CVDisplayLinkIsRunning(displayLink) else { return }
+        CVDisplayLinkStart(displayLink)
+    }
+
+    /// Stops the waveform animation and the transcribing ticker when hidden.
+    func stopAnimating() {
+        if let displayLink, CVDisplayLinkIsRunning(displayLink) {
+            CVDisplayLinkStop(displayLink)
+        }
+        transcribingTimer?.invalidate()
+        transcribingTimer = nil
     }
 
     private func animateBars() {
@@ -432,7 +449,9 @@ final class PostProcessingPanelController: NSObject, NSWindowDelegate {
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
-        !(panelModel?.isProcessing ?? false)
+        // Closing while a request is in flight cancels it rather than being blocked.
+        panelModel?.cancelProcessing()
+        return true
     }
 }
 
@@ -457,6 +476,7 @@ final class PostProcessingPanelModel: ObservableObject {
     private let insertText: (String) -> Void
     private let savePrompt: (String, String) -> [CustomPostProcessingPrompt]
     private let closePanel: () -> Void
+    private var processingTask: Task<Void, Never>?
 
     init(
         transcript: String,
@@ -493,8 +513,15 @@ final class PostProcessingPanelModel: ObservableObject {
     }
 
     func cancel() {
-        guard !isProcessing else { return }
+        cancelProcessing()
         closePanel()
+    }
+
+    /// Cancels any in-flight post-processing request without closing the panel.
+    func cancelProcessing() {
+        processingTask?.cancel()
+        processingTask = nil
+        isProcessing = false
     }
 
     func undo() {
@@ -514,10 +541,13 @@ final class PostProcessingPanelModel: ObservableObject {
         isProcessing = true
         errorMessage = nil
 
-        Task {
+        processingTask = Task {
             do {
                 let processed = try await processAction(sourceText, action)
                 await MainActor.run {
+                    // Bail if the request was cancelled (Stop pressed or panel closed).
+                    guard !Task.isCancelled else { return }
+                    self.processingTask = nil
                     self.isProcessing = false
                     let trimmed = processed.trimmingCharacters(in: .whitespacesAndNewlines)
                     guard !trimmed.isEmpty else {
@@ -529,6 +559,8 @@ final class PostProcessingPanelModel: ObservableObject {
                 }
             } catch {
                 await MainActor.run {
+                    guard !Task.isCancelled else { return }
+                    self.processingTask = nil
                     self.isProcessing = false
                     self.errorMessage = error.localizedDescription
                 }
@@ -584,6 +616,9 @@ struct PostProcessingPanelView: View {
             .padding(.horizontal, 18)
             .padding(.top, 18)
             .padding(.bottom, 18)
+            // Disable only the content while processing — the overlay's Stop button
+            // sits outside this so it stays tappable to cancel an in-flight request.
+            .disabled(model.isProcessing)
 
             if model.isProcessing {
                 processingOverlay
@@ -594,7 +629,6 @@ struct PostProcessingPanelView: View {
         .frame(width: 662, height: 742)
         .foregroundStyle(VoiceTheme.onSurface)
         .tint(VoiceTheme.primary)
-        .disabled(model.isProcessing)
     }
 
     private var header: some View {
@@ -792,6 +826,10 @@ struct PostProcessingPanelView: View {
                     .controlSize(.regular)
                 Text("Post-processing...")
                     .font(.callout)
+                Button("Stop") {
+                    model.cancelProcessing()
+                }
+                .controlSize(.small)
             }
             .padding(18)
             .background(

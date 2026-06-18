@@ -218,9 +218,6 @@ final class AudioCaptureService {
     private var converter: AVAudioConverter?
     private let queue = DispatchQueue(label: "voice.audio.capture")
 
-    /// RMS level below which audio is considered silence and not sent.
-    private let silenceThreshold: Float = 0.008
-
     func startCapture(
         chunkHandler: @escaping (Data) -> Void,
         levelHandler: @escaping (Float) -> Void
@@ -723,47 +720,6 @@ final class TextInsertionService {
             if trySetTextInDescendants(of: child, text: text, depth: depth + 1) { return true }
         }
         return false
-    }
-
-    // MARK: - Simulated Keystrokes (universal fallback)
-
-    /// Types text by simulating keyboard events with CGEventKeyboardSetUnicodeString.
-    /// Works in Terminal, browser address bars, and other apps where clipboard paste fails.
-    private func insertWithKeystrokes(_ text: String) -> Bool {
-        let utf16 = Array(text.utf16)
-        guard !utf16.isEmpty else { return false }
-
-        let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier
-
-        // CGEventKeyboardSetUnicodeString can handle up to ~20 UTF-16 units per event reliably.
-        // We chunk the text to avoid dropped characters.
-        let chunkSize = 16
-        for start in stride(from: 0, to: utf16.count, by: chunkSize) {
-            let end = min(start + chunkSize, utf16.count)
-            var chunk = Array(utf16[start..<end])
-            let length = chunk.count
-
-            guard let keyDown = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true),
-                  let keyUp   = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: false)
-            else { return false }
-
-            keyDown.keyboardSetUnicodeString(stringLength: length, unicodeString: &chunk)
-            keyUp.keyboardSetUnicodeString(stringLength: 0, unicodeString: &chunk)
-
-            if let pid = pid {
-                keyDown.postToPid(pid)
-                keyUp.postToPid(pid)
-            } else {
-                keyDown.post(tap: .cghidEventTap)
-                keyUp.post(tap: .cghidEventTap)
-            }
-
-            // Small delay between chunks to let the target app process input
-            if end < utf16.count {
-                Thread.sleep(forTimeInterval: 0.008)
-            }
-        }
-        return true
     }
 
     // MARK: - Clipboard Paste (for rich-text apps)
