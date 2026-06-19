@@ -379,7 +379,7 @@ struct SettingsView: View {
         SettingsCard {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .top, spacing: 12) {
-                    SettingsCardHeader(title: "API Key", subtitle: "Your Gemini API key for transcription and translation")
+                    SettingsCardHeader(title: "API Key")
                     Spacer()
                     GeminiModelSelector(selection: $geminiModel)
                 }
