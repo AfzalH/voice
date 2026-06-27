@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Added `gemini-3.5-flash` (labelled "Gemini 3.5") as a selectable model in the Settings model switcher.
 
+### Fixed
+- Fixed push-to-talk getting stuck "on" when the shortcut was released before recording had fully started.
+- Made the post-processing Gemini request cancellable with a Stop button and when the panel is closed.
+- Stopped the recording island from animating while idle in the menu bar, reducing idle CPU usage.
+
 ## [3.2.0] - 2026-06-17
 
 ### Added
