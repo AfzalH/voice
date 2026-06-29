@@ -103,6 +103,7 @@ struct MenuBarContentView: View {
 private enum SettingsTab: String, CaseIterable, Identifiable {
     case general
     case transcription
+    case history
 
     var id: String { rawValue }
 
@@ -110,6 +111,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         switch self {
         case .general:        return "General"
         case .transcription:  return "Post-processing"
+        case .history:        return "History"
         }
     }
 
@@ -117,6 +119,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         switch self {
         case .general:        return "gearshape"
         case .transcription:  return "wand.and.stars"
+        case .history:        return "clock.arrow.circlepath"
         }
     }
 }
@@ -174,6 +177,7 @@ struct SettingsView: View {
     @State private var geminiModel: GeminiModel = .defaultValue
     @State private var hotKey = HotKey.defaultValue
     @State private var postProcessingEnabled = true
+    @State private var copyToClipboard = false
     @State private var translationLanguage = LanguageOption.english
     @State private var favoriteTranslationLanguage1 = LanguageOption.english
     @State private var favoriteTranslationLanguage2 = LanguageOption.german
@@ -261,6 +265,8 @@ struct SettingsView: View {
                             generalPanel
                         case .transcription:
                             transcriptionPanel
+                        case .history:
+                            historyPanel
                         }
                     }
                     .padding(18)
@@ -300,6 +306,7 @@ struct SettingsView: View {
                                 geminiModel: geminiModel,
                                 hotKey: hotKey,
                                 postProcessingEnabled: postProcessingEnabled,
+                                copyToClipboard: copyToClipboard,
                                 translationLanguage: translationLanguage,
                                 favoriteTranslationLanguage1: favoriteTranslationLanguage1,
                                 favoriteTranslationLanguage2: favoriteTranslationLanguage2,
@@ -316,6 +323,7 @@ struct SettingsView: View {
                                 geminiModel: geminiModel,
                                 hotKey: hotKey,
                                 postProcessingEnabled: postProcessingEnabled,
+                                copyToClipboard: copyToClipboard,
                                 translationLanguage: translationLanguage,
                                 favoriteTranslationLanguage1: favoriteTranslationLanguage1,
                                 favoriteTranslationLanguage2: favoriteTranslationLanguage2,
@@ -351,6 +359,7 @@ struct SettingsView: View {
             geminiModel = model.settings.geminiModel
             hotKey = model.settings.hotKey
             postProcessingEnabled = model.settings.postProcessingEnabled
+            copyToClipboard = model.settings.copyToClipboard
             translationLanguage = model.settings.translationLanguage
             favoriteTranslationLanguage1 = model.settings.favoriteTranslationLanguage1
             favoriteTranslationLanguage2 = model.settings.favoriteTranslationLanguage2
@@ -498,8 +507,16 @@ struct SettingsView: View {
     private var transcriptionPanel: some View {
         SettingsCard {
             VStack(alignment: .leading, spacing: 10) {
-                SettingsCardHeader(title: "Post-processing", subtitle: "When off, transcripts are copied and inserted immediately")
+                SettingsCardHeader(title: "Post-processing", subtitle: "When off, transcripts are inserted immediately")
                 Toggle("Show post-processing panel after transcription", isOn: $postProcessingEnabled)
+                    .toggleStyle(.checkbox)
+            }
+        }
+
+        SettingsCard {
+            VStack(alignment: .leading, spacing: 10) {
+                SettingsCardHeader(title: "Clipboard", subtitle: "Optionally keep a copy of each dictation on the clipboard")
+                Toggle("Copy dictation to clipboard", isOn: $copyToClipboard)
                     .toggleStyle(.checkbox)
             }
         }
@@ -575,6 +592,97 @@ struct SettingsView: View {
 
     private func deleteCustomPrompt(_ id: UUID) {
         customPrompts.removeAll { $0.id == id }
+    }
+
+    // MARK: - History Panel
+
+    @ViewBuilder
+    private var historyPanel: some View {
+        SettingsCard {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .top) {
+                    SettingsCardHeader(title: "Dictation History", subtitle: "Click an entry to copy it to the clipboard")
+                    Spacer()
+                    Button(role: .destructive) {
+                        model.clearDictationHistory()
+                    } label: {
+                        Label("Delete All", systemImage: "trash")
+                    }
+                    .buttonStyle(VoiceQuietButtonStyle())
+                    .disabled(model.dictationHistory.isEmpty)
+                }
+                Toggle("Save new dictations to history", isOn: Binding(
+                    get: { model.settings.historyEnabled },
+                    set: { model.setHistoryEnabled($0) }
+                ))
+                .toggleStyle(.checkbox)
+            }
+        }
+
+        SettingsCard {
+            if model.dictationHistory.isEmpty {
+                Text("No dictation history yet.")
+                    .font(.callout)
+                    .foregroundStyle(VoiceTheme.secondaryText)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 4)
+            } else {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(model.dictationHistory.enumerated()), id: \.element.id) { index, entry in
+                        if index > 0 {
+                            Divider().overlay(VoiceTheme.outlineVariant.opacity(0.5))
+                        }
+                        HistoryRow(entry: entry) {
+                            model.copyToClipboard(entry.text)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// MARK: - HistoryRow
+
+private struct HistoryRow: View {
+    let entry: DictationHistoryEntry
+    let onCopy: () -> Void
+    @State private var copied = false
+
+    private static let dateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter
+    }()
+
+    var body: some View {
+        Button {
+            onCopy()
+            copied = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { copied = false }
+        } label: {
+            HStack(alignment: .top, spacing: 10) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(entry.text)
+                        .font(.callout)
+                        .foregroundStyle(VoiceTheme.onSurface)
+                        .lineLimit(3)
+                        .multilineTextAlignment(.leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(Self.dateFormatter.string(from: entry.date))
+                        .font(.caption2)
+                        .foregroundStyle(VoiceTheme.secondaryText)
+                }
+                Spacer(minLength: 8)
+                Image(systemName: copied ? "checkmark.circle.fill" : "doc.on.clipboard")
+                    .font(.system(size: 13))
+                    .foregroundStyle(copied ? VoiceTheme.success : VoiceTheme.secondaryText)
+            }
+            .padding(.vertical, 7)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }
 

@@ -603,41 +603,37 @@ final class TextInsertionService {
         )
     }
 
+    /// Inserts `text` into the focused app. When `copyToClipboard` is true the
+    /// text is also left on the clipboard; otherwise the previous clipboard
+    /// contents are restored after any paste. Returns whether insertion ran.
+    @discardableResult
     func insertText(
         _ text: String,
         into target: TextInsertionTarget? = nil,
         copyToClipboard: Bool = false
     ) -> Bool {
-        if copyToClipboard {
-            copyTextToClipboard(text)
-        }
-
-        // For rich-text apps and terminal emulators, prefer clipboard paste
         let app = NSWorkspace.shared.frontmostApplication
         let appName = target?.appName ?? app?.localizedName ?? ""
         let bundleID = target?.bundleID ?? app?.bundleIdentifier ?? ""
+
+        // For rich-text apps and terminal emulators, prefer clipboard paste.
         if prefersClipboardPaste(appName: appName, bundleID: bundleID) {
             activateTargetIfNeeded(target)
             return pasteWithClipboardFallback(text, restoreClipboard: !copyToClipboard)
         }
 
-        // Try Accessibility API first (works in most text fields)
+        // Try the Accessibility API first (works in most native text fields).
         if insertWithAccessibility(text, into: target) {
-            if copyToClipboard {
-                copyTextToClipboard(text)
-            }
+            if copyToClipboard { copyTextToClipboard(text) }
             return true
         }
-
         activateTargetIfNeeded(target)
         if insertWithAccessibility(text, into: target) {
-            if copyToClipboard {
-                copyTextToClipboard(text)
-            }
+            if copyToClipboard { copyTextToClipboard(text) }
             return true
         }
 
-        // Fall back to clipboard paste as universal method
+        // Universal fallback: clipboard paste.
         return pasteWithClipboardFallback(text, restoreClipboard: !copyToClipboard)
     }
 

@@ -10,6 +10,7 @@ final class AppModel: ObservableObject {
     @Published var audioLevel: Float = 0
     @Published var errorMessage: String?
     @Published var isValidatingKey = false
+    @Published private(set) var dictationHistory: [DictationHistoryEntry] = []
 
     let settings = UserSettings()
     private let insertionService = TextInsertionService()
@@ -36,6 +37,7 @@ final class AppModel: ObservableObject {
 
     init() {
         settings.load()
+        dictationHistory = DictationHistoryStore.load()
         ensureLaunchAtLogin()
         refreshPermissions()
         configureCallbacks()
@@ -115,6 +117,40 @@ final class AppModel: ObservableObject {
         saveSettings()
     }
 
+    // MARK: - Dictation History
+
+    func setHistoryEnabled(_ enabled: Bool) {
+        objectWillChange.send()
+        settings.historyEnabled = enabled
+        saveSettings()
+    }
+
+    /// Saves a generated dictation to history (newest first), when enabled.
+    private func recordDictation(_ text: String) {
+        guard settings.historyEnabled else { return }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        var entries = dictationHistory
+        entries.insert(DictationHistoryEntry(text: trimmed), at: 0)
+        if entries.count > DictationHistoryStore.maxEntries {
+            entries = Array(entries.prefix(DictationHistoryStore.maxEntries))
+        }
+        dictationHistory = entries
+        DictationHistoryStore.save(entries)
+    }
+
+    func clearDictationHistory() {
+        dictationHistory = []
+        DictationHistoryStore.save([])
+    }
+
+    /// Copies a history entry to the clipboard (used when a row is clicked).
+    func copyToClipboard(_ text: String) {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(text, forType: .string)
+    }
+
     @Published var hasMicrophonePermission = false
     @Published var hasAccessibilityPermission = false
     @Published var hasInputMonitoringPermission = false
@@ -158,6 +194,7 @@ final class AppModel: ObservableObject {
         geminiModel: GeminiModel = .defaultValue,
         hotKey: HotKey,
         postProcessingEnabled: Bool = true,
+        copyToClipboard: Bool = false,
         translationLanguage: LanguageOption = .english,
         favoriteTranslationLanguage1: LanguageOption = .english,
         favoriteTranslationLanguage2: LanguageOption = .german,
@@ -188,6 +225,7 @@ final class AppModel: ObservableObject {
             settings.geminiModel = geminiModel
             settings.hotKey = hotKey
             settings.postProcessingEnabled = postProcessingEnabled
+            settings.copyToClipboard = copyToClipboard
             settings.translationLanguage = translationLanguage
             settings.favoriteTranslationLanguage1 = favoriteTranslationLanguage1
             settings.favoriteTranslationLanguage2 = favoriteTranslationLanguage2
@@ -443,10 +481,8 @@ final class AppModel: ObservableObject {
         isPostProcessing = false
         pendingInsertionTarget = nil
 
-        let success = insertionService.insertText(trimmed, into: target, copyToClipboard: true)
-        if !success {
-            showError("Text copied to clipboard, but could not be inserted in the target app.")
-        }
+        recordDictation(trimmed)
+        insertionService.insertText(trimmed, into: target, copyToClipboard: settings.copyToClipboard)
     }
 
     private func saveCustomPostProcessingPrompt(title: String, prompt: String) -> [CustomPostProcessingPrompt] {

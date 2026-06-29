@@ -5,6 +5,15 @@ All notable changes to SrizonVoice will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.4.0] - 2026-06-29
+
+### Added
+- Dictation history: every dictation is now saved and listed in a new History tab in Settings. Click an entry to copy it to the clipboard, or use Delete All to clear it. History saving can be turned off with a toggle (on by default).
+- A "Copy dictation to clipboard" setting (off by default) that controls whether each dictation is also placed on the clipboard.
+
+### Changed
+- Dictated text is no longer always copied to the clipboard after insertion. Turn on "Copy dictation to clipboard" in Settings to keep that behavior.
+
 ## [3.3.0] - 2026-06-19
 
 ### Added
@@ -126,6 +135,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CGEvent tap for global Esc key handling
 - SMAppService for launch-at-login registration
 
+[3.4.0]: https://github.com/AfzalH/voice/releases/tag/v3.4.0
 [3.3.0]: https://github.com/AfzalH/voice/releases/tag/v3.3.0
 [3.2.0]: https://github.com/AfzalH/voice/releases/tag/v3.2.0
 [3.1.0]: https://github.com/AfzalH/voice/releases/tag/v3.1.0

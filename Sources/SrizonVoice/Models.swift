@@ -389,6 +389,40 @@ enum TranscriptionOutputMode: String, CaseIterable, Codable {
     static let defaultCustomPrompt = "Transcribe the speech into clean, grammatically correct sentences. Remove filler sounds and hesitation words such as um, uh, ah, er, hmm, like, and you know when they do not add meaning. Remove stutters, repeated words, false starts, mumbling artifacts, and partial phrases. Correct obvious transcription errors, grammar, punctuation, capitalization, and formatting. Preserve the speaker's intended meaning, language, and tone. Return only polished final sentences."
 }
 
+// MARK: - DictationHistory
+
+/// A single past dictation, shown in the History tab and copyable on click.
+struct DictationHistoryEntry: Identifiable, Codable, Equatable {
+    let id: UUID
+    let text: String
+    let date: Date
+
+    init(id: UUID = UUID(), text: String, date: Date = Date()) {
+        self.id = id
+        self.text = text
+        self.date = date
+    }
+}
+
+/// Persists dictation history to UserDefaults, newest first, capped so it can't
+/// grow without bound.
+enum DictationHistoryStore {
+    private static let key = "dictation.history"
+    static let maxEntries = 200
+
+    static func load() -> [DictationHistoryEntry] {
+        guard let data = UserDefaults.standard.data(forKey: key),
+              let decoded = try? JSONDecoder().decode([DictationHistoryEntry].self, from: data)
+        else { return [] }
+        return decoded
+    }
+
+    static func save(_ entries: [DictationHistoryEntry]) {
+        guard let data = try? JSONEncoder().encode(entries) else { return }
+        UserDefaults.standard.set(data, forKey: key)
+    }
+}
+
 // MARK: - PostProcessing
 
 struct CustomPostProcessingPrompt: Identifiable, Codable, Equatable {
@@ -462,6 +496,8 @@ final class UserSettings {
         static let customPrompt        = "dictation.customPrompt"
         static let customPostPrompts   = "postProcessing.customPrompts"
         static let postProcessingEnabled = "postProcessing.enabled"
+        static let copyToClipboard     = "insertion.copyToClipboard"
+        static let historyEnabled      = "history.enabled"
         static let translationLanguage = "dictation.translationLanguage"
         static let favoriteTranslationLanguage1 = "postProcessing.favoriteTranslationLanguage1"
         static let favoriteTranslationLanguage2 = "postProcessing.favoriteTranslationLanguage2"
@@ -481,6 +517,8 @@ final class UserSettings {
     var customPrompt: String = TranscriptionOutputMode.defaultCustomPrompt
     var customPostProcessingPrompts: [CustomPostProcessingPrompt] = []
     var postProcessingEnabled = true
+    var copyToClipboard = false
+    var historyEnabled = true
     var translationLanguage: LanguageOption = .english
     var favoriteTranslationLanguage1: LanguageOption = .english
     var favoriteTranslationLanguage2: LanguageOption = .german
@@ -530,6 +568,12 @@ final class UserSettings {
         if defaults.object(forKey: Key.postProcessingEnabled) != nil {
             postProcessingEnabled = defaults.bool(forKey: Key.postProcessingEnabled)
         }
+        if defaults.object(forKey: Key.copyToClipboard) != nil {
+            copyToClipboard = defaults.bool(forKey: Key.copyToClipboard)
+        }
+        if defaults.object(forKey: Key.historyEnabled) != nil {
+            historyEnabled = defaults.bool(forKey: Key.historyEnabled)
+        }
         if let raw = defaults.string(forKey: Key.translationLanguage),
            let option = LanguageOption(rawValue: raw)
         {
@@ -568,6 +612,8 @@ final class UserSettings {
             defaults.set(data, forKey: Key.customPostPrompts)
         }
         defaults.set(postProcessingEnabled, forKey: Key.postProcessingEnabled)
+        defaults.set(copyToClipboard, forKey: Key.copyToClipboard)
+        defaults.set(historyEnabled, forKey: Key.historyEnabled)
         defaults.set(translationLanguage.rawValue, forKey: Key.translationLanguage)
         defaults.set(favoriteTranslationLanguage1.rawValue, forKey: Key.favoriteTranslationLanguage1)
         defaults.set(favoriteTranslationLanguage2.rawValue, forKey: Key.favoriteTranslationLanguage2)
