@@ -14,10 +14,8 @@ Download the latest installer: [vBoard-3.6.1.dmg](https://github.com/AfzalH/voic
 
 Checksums and older builds are available on [GitHub Releases](https://github.com/AfzalH/voice/releases/latest).
 
-> [!WARNING]
-> **"Apple could not verify" Warning**
->
-The app is signed with a Developer ID certificate and notarized by Apple, so it opens without Gatekeeper warnings.
+> [!NOTE]
+> The app is signed with a Developer ID certificate and notarized by Apple, so it opens without any Gatekeeper warning. No `xattr` workaround is needed.
 
 ## Setup
 
