@@ -290,14 +290,14 @@ struct SettingsView: View {
     @State private var customPrompts: [CustomPostProcessingPrompt] = []
     @State private var handsfreeMaxSeconds: Double = Double(UserSettings.defaultHandsfreeSeconds)
 
-    private var allPermissionsGranted: Bool {
-        model.hasMicrophonePermission && model.hasAccessibilityPermission && model.hasInputMonitoringPermission
-    }
+    private var allPermissionsGranted: Bool { model.hasRequiredPermissions }
+
+    private var permissionsTotalCount: Int { model.needsInputMonitoringFallback ? 3 : 2 }
 
     private var permissionsGrantedCount: Int {
         (model.hasMicrophonePermission ? 1 : 0)
         + (model.hasAccessibilityPermission ? 1 : 0)
-        + (model.hasInputMonitoringPermission ? 1 : 0)
+        + (model.needsInputMonitoringFallback && model.hasInputMonitoringPermission ? 1 : 0)
     }
 
     private var visibleSettingsTabs: [SettingsTab] {
@@ -454,7 +454,7 @@ struct SettingsView: View {
                         .buttonStyle(VoicePrimaryButtonStyle())
                         .disabled(model.isValidatingKey || shortcutsConflict)
                     } else {
-                        Button("Grant Permissions (\(permissionsGrantedCount) of 3 given)") {
+                        Button("Grant Permissions (\(permissionsGrantedCount) of \(permissionsTotalCount) given)") {
                             model.requestPermissions()
                         }
                         .buttonStyle(VoicePrimaryButtonStyle())
@@ -607,15 +607,23 @@ struct SettingsView: View {
                 HStack(spacing: 16) {
                     PermissionRow(title: "Microphone", granted: model.hasMicrophonePermission)
                     PermissionRow(title: "Accessibility", granted: model.hasAccessibilityPermission)
-                    PermissionRow(title: "Input Monitoring", granted: model.hasInputMonitoringPermission)
+                    if model.needsInputMonitoringFallback {
+                        PermissionRow(title: "Input Monitoring", granted: model.hasInputMonitoringPermission)
+                    }
                     Spacer()
-                    if !model.hasInputMonitoringPermission {
+                    if !allPermissionsGranted {
                         Button("Restart App") {
                             Self.restartApp()
                         }
                         .buttonStyle(VoiceQuietButtonStyle())
                         .controlSize(.small)
                     }
+                }
+                if model.needsInputMonitoringFallback {
+                    Text("Your system did not allow the keyboard shortcut listener with Accessibility alone. Please also grant Input Monitoring.")
+                        .font(.caption)
+                        .foregroundStyle(VoiceTheme.secondaryText)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
         }

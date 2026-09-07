@@ -27,7 +27,7 @@ Checksums and older builds are available on [GitHub Releases](https://github.com
 
 1. Get a Gemini API key from [aistudio.google.com](https://aistudio.google.com/apikey)
 2. Launch SrizonVoice — Settings opens automatically on first run
-3. Grant Microphone, Accessibility, and Input Monitoring permissions
+3. Grant Microphone and Accessibility permissions
 4. Enter your Gemini API key, choose a model if needed, and click Save
 
 ## Usage
@@ -52,7 +52,7 @@ swift run
 ./scripts/build-app.sh
 ```
 
-This produces `dist/SrizonVoice.app`. The bundle is signed with the first Apple Development / Developer ID identity found in your keychain (override with `CODESIGN_IDENTITY=...`, or `CODESIGN_IDENTITY=-` for ad-hoc). A stable identity is what lets macOS keep the Accessibility, Input Monitoring, and Microphone grants across rebuilds.
+This produces `dist/SrizonVoice.app`. The bundle is signed with the first Apple Development / Developer ID identity found in your keychain (override with `CODESIGN_IDENTITY=...`, or `CODESIGN_IDENTITY=-` for ad-hoc). A stable identity is what lets macOS keep the Accessibility and Microphone grants across rebuilds.
 
 ## Create distributable DMG
 
@@ -117,7 +117,7 @@ Removes the app, preferences, caches, permissions, and login item:
 
 - **Microphone** — to capture your voice
 - **Accessibility** — to insert text and support clipboard paste fallback
-- **Input Monitoring** — to monitor the global hotkey and Escape key
+- **Input Monitoring** — not normally needed; Accessibility already allows the global shortcut listener. Settings only asks for it if macOS refuses the listener without it.
 
 ## Privacy
 

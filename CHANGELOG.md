@@ -13,9 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Function keys (F1–F15) can be used as shortcuts without a modifier.
 - A "Speaking" quick picker in the menu-bar popover that hints Gemini which language you are dictating in, with an **Auto** option. It shows your recently used languages, or the system languages plus English, German, French, and Spanish when there is no history yet. A "More" menu lists every language.
 - Recently used languages (spoken hint and translation targets) are remembered and also surface as quick translation buttons in the post-processing bubble.
-- Signing: the build script signs with a Developer ID or Apple Development certificate when one is present (hardened runtime + entitlements), so macOS keeps Microphone, Accessibility, and Input Monitoring grants across rebuilds. New `scripts/upgrade-app.sh` upgrades in place without touching settings or permissions, and `scripts/notarize.sh` notarizes and staples the DMG.
+- Signing: the build script signs with a Developer ID or Apple Development certificate when one is present (hardened runtime + entitlements), so macOS keeps Microphone and Accessibility grants across rebuilds. New `scripts/upgrade-app.sh` upgrades in place without touching settings or permissions, and `scripts/notarize.sh` notarizes and staples the DMG.
 
 ### Changed
+- Only Microphone and Accessibility permissions are required now. Input Monitoring is no longer requested up front; it is offered as an extra step only if macOS refuses the shortcut listener with Accessibility alone.
 - The recording island is now a small black pill just above the Dock, with six white dots that grow into bars with your voice and pulse in sequence while transcribing, instead of a wide bar at the top of the screen.
 - Push to talk no longer interferes with the shortcut key's normal function: a quick tap (under 200 ms) or a combination with another key (e.g. `fn`+`F1`, `Right ⌘`+`C`) is ignored, and the recording sound and island only appear once the key is clearly being held.
 - Handsfree shortcuts based on modifiers (`fn`, `Right ⌘`, `⌃⌥`) toggle on release and only when no other key was pressed in between, so holding the modifier for a normal combination never starts recording.

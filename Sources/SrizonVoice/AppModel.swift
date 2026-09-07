@@ -54,7 +54,7 @@ final class AppModel: ObservableObject {
         // On first launch the user hasn't granted Input Monitoring yet and
         // calling CGEvent.tapCreate / CGPreflightListenEventAccess can
         // trigger the system dialog before the user is ready.
-        if hasInputMonitoringPermission {
+        if hasAccessibilityPermission {
             registerHotKey()
         }
         bindStopControls()
@@ -64,18 +64,25 @@ final class AppModel: ObservableObject {
 
     func registerHotKey() {
         hotKeyMonitor.unregister()
-        guard permissionManager.inputMonitoringPermissionGranted else {
-            // Don't attempt to create event tap without Input Monitoring permission —
-            // CGEvent.tapCreate will silently return nil.
+        // Keyboard event taps are allowed once the app is Accessibility-trusted;
+        // a separate Input Monitoring grant is normally not needed.
+        guard permissionManager.accessibilityPermissionGranted else {
             return
         }
+        escapeKeyMonitor.start()
         do {
             try hotKeyMonitor.register(
                 pushToTalk: settings.pushToTalkHotKey,
                 handsfree: settings.handsfreeHotKey
             )
+            needsInputMonitoringFallback = false
         } catch {
-            showError("Failed to register global shortcut. Check Input Monitoring permission in System Settings > Privacy & Security.")
+            // Some systems still refuse the tap without Input Monitoring; surface
+            // that permission as an optional extra step instead of failing silently.
+            needsInputMonitoringFallback = !permissionManager.inputMonitoringPermissionGranted
+            if !needsInputMonitoringFallback {
+                showError("Failed to register global shortcut. Try restarting the app.")
+            }
         }
     }
 
@@ -181,6 +188,16 @@ final class AppModel: ObservableObject {
     @Published var hasMicrophonePermission = false
     @Published var hasAccessibilityPermission = false
     @Published var hasInputMonitoringPermission = false
+    /// True when creating the keyboard event tap failed even though Accessibility is
+    /// granted. Only then is Input Monitoring shown as an additional permission.
+    @Published var needsInputMonitoringFallback = false
+
+    /// Everything the app needs to work: Microphone + Accessibility, plus Input
+    /// Monitoring only on systems where the event tap could not be created without it.
+    var hasRequiredPermissions: Bool {
+        hasMicrophonePermission && hasAccessibilityPermission
+            && (!needsInputMonitoringFallback || hasInputMonitoringPermission)
+    }
 
     func requestPermissions() {
         Task { @MainActor in
@@ -204,8 +221,11 @@ final class AppModel: ObservableObject {
                 try? await Task.sleep(nanoseconds: 500_000_000)
             }
 
-            // Step 3: Input Monitoring — only prompt after accessibility is granted
-            if !permissionManager.inputMonitoringPermissionGranted {
+            // Accessibility is what allows the keyboard event tap; register now.
+            registerHotKey()
+
+            // Step 3 (rare): Input Monitoring, only if the tap could not be created.
+            if needsInputMonitoringFallback, !permissionManager.inputMonitoringPermissionGranted {
                 // Deactivate so the system dialog appears in front of the settings window
                 NSApp.deactivate()
                 try? await Task.sleep(nanoseconds: 200_000_000)
@@ -470,7 +490,9 @@ final class AppModel: ObservableObject {
                 }
             }
         }
-        escapeKeyMonitor.start()
+        // The tap itself is started in registerHotKey(), once Accessibility is
+        // granted. Opening a keyboard tap before that makes macOS prompt for
+        // Input Monitoring, which the app does not otherwise need.
     }
 
     private func startHandsfreeAutoStop() {
@@ -602,7 +624,7 @@ final class AppModel: ObservableObject {
                    (!hadInputMonitoring && self.hasInputMonitoringPermission) {
                     self.registerHotKey()
                 }
-                if self.hasMicrophonePermission && self.hasAccessibilityPermission && self.hasInputMonitoringPermission {
+                if self.hasRequiredPermissions {
                     return
                 }
             }

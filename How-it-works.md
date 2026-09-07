@@ -121,7 +121,7 @@ A separate, always-on CGEvent tap listens for `keyDown` events with key code 53 
 
 ### Why CGEvent Taps Instead of NSEvent.addGlobalMonitorForEvents
 
-Global NSEvent monitors cannot see modifier side information reliably and cannot swallow events. CGEvent taps can do both. The app checks Input Monitoring before registering the taps and asks the user to grant it during setup.
+Global NSEvent monitors cannot see modifier side information reliably and cannot swallow events. CGEvent taps can do both. An Accessibility-trusted process may create keyboard event taps, so the app registers them as soon as Accessibility is granted. If `CGEvent.tapCreate` still returns `nil`, the app falls back to asking for Input Monitoring as an extra permission.
 
 ---
 
@@ -349,7 +349,7 @@ The system prompt dialog is triggered by calling `AXIsProcessTrustedWithOptions`
 
 ### Input Monitoring
 
-Checked with `CGPreflightListenEventAccess()` and requested with `CGRequestListenEventAccess()`. Required for global hotkey and Escape monitoring.
+Checked with `CGPreflightListenEventAccess()` and requested with `CGRequestListenEventAccess()`. Normally not needed: Accessibility already permits the keyboard event taps. It is only requested (and shown in Settings) when tap creation fails despite Accessibility being granted.
 
 ---
 
