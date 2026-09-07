@@ -4,28 +4,67 @@ import Carbon
 
 // MARK: - GlobalHotKeyMonitor
 
-/// Monitors a global hotkey with press-and-release semantics using a unified CGEvent tap.
-/// Supports regular key+modifier combos, modifier-only combos, and the Fn/Globe key.
-/// `onKeyDown` fires when the hotkey is pressed, `onKeyUp` when released.
+/// Monitors the two global shortcuts (push-to-talk and handsfree) with a single
+/// CGEvent tap.
+///
+/// Push-to-talk semantics: the shortcut must be *held*. Recording begins on press;
+/// release commits it. Two situations cancel instead of committing so that the
+/// shortcut never interferes with normal use of the key:
+///  - the key was released within `tapThreshold` (a tap, e.g. fn tap to switch
+///    input source or show emoji);
+///  - another key was pressed while the shortcut was held (a combination, e.g.
+///    fn+F1 or right⌘+C).
+///
+/// Handsfree semantics: a *tap* toggles recording. For modifier-based shortcuts
+/// (fn, right ⌘, ⌃⌥…) the toggle fires on release, and only if no other key was
+/// pressed in between, so holding the modifier for a normal combination never
+/// triggers it. For key+modifier shortcuts (⌥Space) it fires on key down, and the
+/// key event is swallowed so the frontmost app does not also receive it.
+///
+/// Left and right modifier keys are told apart using the device-specific flag
+/// bits macOS attaches to events (falling back to side-agnostic matching on
+/// keyboards that do not report them).
 ///
 /// Uses `.cgSessionEventTap` + `.headInsertEventTap` for highest-priority system-wide
 /// interception, and a watchdog timer to re-enable the tap if macOS silently disables it.
 final class GlobalHotKeyMonitor {
-    var onKeyDown: (() -> Void)?
-    var onKeyUp: (() -> Void)?
+    /// Push-to-talk shortcut went down. Start capturing audio immediately.
+    var onPushToTalkBegan: (() -> Void)?
+    /// Push-to-talk shortcut ended. `cancelled` is true for taps and combinations.
+    var onPushToTalkEnded: ((_ cancelled: Bool) -> Void)?
+    /// Handsfree shortcut was tapped.
+    var onHandsfreeToggled: (() -> Void)?
+
+    /// Presses shorter than this are treated as taps, not push-to-talk holds.
+    static let tapThreshold: TimeInterval = 0.2
 
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
-    private var registeredHotKey: HotKey?
-    private var isDown = false
     private var watchdogTimer: Timer?
 
-    func register(hotKey: HotKey) throws {
-        unregister()
-        registeredHotKey = hotKey
+    private var pushToTalk: HotKey?
+    private var handsfree: HotKey?
 
-        // Always listen for ALL event types so we never miss an event,
-        // regardless of hotkey kind (Fn, modifier-only, or regular key).
+    /// Per-shortcut engagement state.
+    private struct Engagement {
+        var isEngaged = false
+        var engagedAt: TimeInterval = 0
+        /// Another key was pressed while engaged; the release must not fire.
+        var interrupted = false
+    }
+
+    private var pushToTalkState = Engagement()
+    private var handsfreeState = Engagement()
+    private var fnIsDown = false
+
+    // MARK: - Registration
+
+    func register(pushToTalk: HotKey?, handsfree: HotKey?) throws {
+        unregister()
+        self.pushToTalk = pushToTalk
+        self.handsfree = handsfree
+        guard pushToTalk != nil || handsfree != nil else { return }
+
         let mask: CGEventMask =
               CGEventMask(1 << CGEventType.keyDown.rawValue)
             | CGEventMask(1 << CGEventType.keyUp.rawValue)
@@ -35,7 +74,7 @@ final class GlobalHotKeyMonitor {
         guard let tap = CGEvent.tapCreate(
             tap: .cgSessionEventTap,
             place: .headInsertEventTap,
-            options: .listenOnly,
+            options: .defaultTap,
             eventsOfInterest: mask,
             callback: { _, type, event, userInfo -> Unmanaged<CGEvent>? in
                 guard let userInfo else { return Unmanaged.passUnretained(event) }
@@ -49,19 +88,8 @@ final class GlobalHotKeyMonitor {
                     return Unmanaged.passUnretained(event)
                 }
 
-                guard let hotKey = monitor.registeredHotKey else {
-                    return Unmanaged.passUnretained(event)
-                }
-
-                if hotKey.isFnKey {
-                    monitor.handleFnKey(type: type, event: event)
-                } else if hotKey.isModifierOnly {
-                    monitor.handleModifierOnly(event: event, hotKey: hotKey)
-                } else {
-                    monitor.handleRegularKey(type: type, event: event, hotKey: hotKey)
-                }
-
-                return Unmanaged.passUnretained(event)
+                let swallow = monitor.handle(type: type, event: event)
+                return swallow ? nil : Unmanaged.passUnretained(event)
             },
             userInfo: userInfo
         ) else { throw HotKeyError.registrationFailed }
@@ -82,70 +110,171 @@ final class GlobalHotKeyMonitor {
         }
     }
 
-    // MARK: - Event handlers
+    // MARK: - Event dispatch
 
-    private func handleFnKey(type: CGEventType, event: CGEvent) {
-        // The Fn/Globe key can arrive as either flagsChanged (modifier flag)
-        // or keyDown/keyUp with key code 63, depending on macOS version and
-        // System Settings > Keyboard configuration.
-        if type == .flagsChanged {
-            let isFnDown = event.flags.contains(.maskSecondaryFn)
-            if isFnDown && !isDown {
-                isDown = true
-                onKeyDown?()
-            } else if !isFnDown && isDown {
-                isDown = false
-                onKeyUp?()
+    /// Returns true when the event must be swallowed (not delivered to the app).
+    private func handle(type: CGEventType, event: CGEvent) -> Bool {
+        let keyCode = UInt32(event.getIntegerValueField(.keyboardEventKeycode))
+        let flags = event.flags
+
+        // The Fn/Globe key arrives as flagsChanged (or keyDown/keyUp on some
+        // configurations), always with key code 63.
+        if keyCode == 63 {
+            let wasDown = fnIsDown
+            switch type {
+            case .flagsChanged: fnIsDown = flags.contains(.maskSecondaryFn)
+            case .keyDown:      fnIsDown = true
+            case .keyUp:        fnIsDown = false
+            default: break
             }
-        } else {
-            let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
-            if keyCode == 63 { // Fn/Globe key code
-                if type == .keyDown && !isDown {
-                    isDown = true
-                    onKeyDown?()
-                } else if type == .keyUp && isDown {
-                    isDown = false
-                    onKeyUp?()
+            if fnIsDown != wasDown {
+                if let hotKey = pushToTalk, hotKey.isFnKey {
+                    updatePushToTalk(pressed: fnIsDown, extended: false)
+                }
+                if let hotKey = handsfree, hotKey.isFnKey {
+                    updateHandsfree(pressed: fnIsDown, extended: false)
                 }
             }
+            return false
+        }
+
+        switch type {
+        case .flagsChanged:
+            // Modifier-only chords engage/release as the held set changes.
+            // Key+modifier shortcuts release when a required modifier lifts.
+            if let hotKey = pushToTalk, !hotKey.isFnKey {
+                if hotKey.isModifierOnly {
+                    let match = Self.chordMatch(hotKey, flags: flags)
+                    updatePushToTalk(pressed: match == .exact, extended: match == .superset)
+                } else if pushToTalkState.isEngaged, !Self.modifiersMatch(hotKey, flags: flags) {
+                    updatePushToTalk(pressed: false, extended: false)
+                }
+            }
+            if let hotKey = handsfree, !hotKey.isFnKey, hotKey.isModifierOnly {
+                let match = Self.chordMatch(hotKey, flags: flags)
+                updateHandsfree(pressed: match == .exact, extended: match == .superset)
+            }
+            return false
+
+        case .keyDown:
+            let isRepeat = event.getIntegerValueField(.keyboardEventAutorepeat) != 0
+            var swallow = false
+
+            if let hotKey = pushToTalk, !hotKey.isFnKey, !hotKey.isModifierOnly, keyCode == hotKey.keyCode {
+                if pushToTalkState.isEngaged {
+                    swallow = true // auto-repeat while held
+                } else if !isRepeat, Self.modifiersMatch(hotKey, flags: flags) {
+                    updatePushToTalk(pressed: true, extended: false)
+                    swallow = true
+                }
+            }
+            if let hotKey = handsfree, !hotKey.isFnKey, !hotKey.isModifierOnly, keyCode == hotKey.keyCode,
+               Self.modifiersMatch(hotKey, flags: flags)
+            {
+                if !isRepeat { onHandsfreeToggled?() }
+                swallow = true
+            }
+            if swallow { return true }
+
+            // Any other key pressed while a modifier-style shortcut is held means the
+            // user is typing a combination — the shortcut must not fire.
+            if !isRepeat {
+                interruptPushToTalk()
+                handsfreeState.interrupted = true
+            }
+            return false
+
+        case .keyUp:
+            var swallow = false
+            if let hotKey = pushToTalk, !hotKey.isFnKey, !hotKey.isModifierOnly, keyCode == hotKey.keyCode {
+                if pushToTalkState.isEngaged {
+                    updatePushToTalk(pressed: false, extended: false)
+                    swallow = true
+                }
+            }
+            if let hotKey = handsfree, !hotKey.isFnKey, !hotKey.isModifierOnly, keyCode == hotKey.keyCode,
+               Self.modifiersMatch(hotKey, flags: flags)
+            {
+                swallow = true
+            }
+            return swallow
+
+        default:
+            return false
         }
     }
 
-    private func handleModifierOnly(event: CGEvent, hotKey: HotKey) {
-        let currentMods = Self.carbonModifiers(from: event.flags)
-        let required = hotKey.modifiers
-        let allHeld = (currentMods & required) == required
-        if allHeld && !isDown {
-            isDown = true
-            onKeyDown?()
-        } else if !allHeld && isDown {
-            isDown = false
-            onKeyUp?()
+    // MARK: - State machines
+
+    /// `extended`: the chord is still held but an extra modifier was added.
+    private func updatePushToTalk(pressed: Bool, extended: Bool) {
+        if extended {
+            interruptPushToTalk()
+            return
+        }
+        if pressed && !pushToTalkState.isEngaged {
+            pushToTalkState = Engagement(isEngaged: true, engagedAt: ProcessInfo.processInfo.systemUptime)
+            onPushToTalkBegan?()
+        } else if !pressed && pushToTalkState.isEngaged {
+            let held = ProcessInfo.processInfo.systemUptime - pushToTalkState.engagedAt
+            let alreadyEnded = pushToTalkState.interrupted // cancel was reported at interruption time
+            let cancelled = held < Self.tapThreshold
+            pushToTalkState = Engagement()
+            if !alreadyEnded { onPushToTalkEnded?(cancelled) }
         }
     }
 
-    private func handleRegularKey(type: CGEventType, event: CGEvent, hotKey: HotKey) {
-        let keyCode = UInt32(event.getIntegerValueField(.keyboardEventKeycode))
+    private func interruptPushToTalk() {
+        guard pushToTalkState.isEngaged, !pushToTalkState.interrupted else { return }
+        pushToTalkState.interrupted = true
+        // Stop right away so the combination the user is typing isn't recorded.
+        onPushToTalkEnded?(true)
+    }
 
-        if type == .keyDown && !isDown && keyCode == hotKey.keyCode {
-            let currentMods = Self.carbonModifiers(from: event.flags)
-            let required = hotKey.modifiers
-            if (currentMods & required) == required {
-                isDown = true
-                onKeyDown?()
-            }
-        } else if type == .keyUp && isDown && keyCode == hotKey.keyCode {
-            isDown = false
-            onKeyUp?()
-        } else if type == .flagsChanged && isDown {
-            // Modifier released while key is held — stop recording
-            let currentMods = Self.carbonModifiers(from: event.flags)
-            let required = hotKey.modifiers
-            if (currentMods & required) != required {
-                isDown = false
-                onKeyUp?()
+    private func updateHandsfree(pressed: Bool, extended: Bool) {
+        if extended {
+            handsfreeState.interrupted = true
+            return
+        }
+        if pressed && !handsfreeState.isEngaged {
+            handsfreeState = Engagement(isEngaged: true, engagedAt: ProcessInfo.processInfo.systemUptime)
+        } else if !pressed && handsfreeState.isEngaged {
+            let fire = !handsfreeState.interrupted
+            handsfreeState = Engagement()
+            if fire { onHandsfreeToggled?() }
+        }
+    }
+
+    // MARK: - Matching
+
+    private enum ChordMatch { case none, exact, superset }
+
+    /// How the currently held modifiers relate to a modifier-only shortcut.
+    private static func chordMatch(_ hotKey: HotKey, flags: CGEventFlags) -> ChordMatch {
+        let generic = carbonModifiers(from: flags)
+        guard generic & hotKey.modifiers == hotKey.modifiers else { return .none }
+        guard sidesMatch(hotKey, flags: flags) else { return .none }
+        return generic == hotKey.modifiers ? .exact : .superset
+    }
+
+    /// Exact match of generic modifiers plus side check, for key+modifier shortcuts.
+    private static func modifiersMatch(_ hotKey: HotKey, flags: CGEventFlags) -> Bool {
+        carbonModifiers(from: flags) == hotKey.modifiers && sidesMatch(hotKey, flags: flags)
+    }
+
+    /// For side-specific shortcuts, verifies the required side is held using the
+    /// device-specific flag bits. Keyboards that report no side bits pass.
+    private static func sidesMatch(_ hotKey: HotKey, flags: CGEventFlags) -> Bool {
+        let raw = flags.rawValue
+        for key in hotKey.modifierKeys {
+            let familyBits = ModifierKey.allCases
+                .filter { $0.cgFlag == key.cgFlag }
+                .reduce(UInt64(0)) { $0 | $1.deviceFlagBit }
+            if raw & familyBits != 0, raw & key.deviceFlagBit == 0 {
+                return false
             }
         }
+        return true
     }
 
     private static func carbonModifiers(from flags: CGEventFlags) -> UInt32 {
@@ -171,8 +300,11 @@ final class GlobalHotKeyMonitor {
         }
         eventTap = nil
         runLoopSource = nil
-        registeredHotKey = nil
-        isDown = false
+        pushToTalk = nil
+        handsfree = nil
+        pushToTalkState = Engagement()
+        handsfreeState = Engagement()
+        fnIsDown = false
     }
 }
 

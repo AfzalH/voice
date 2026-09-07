@@ -219,21 +219,178 @@ enum LanguageOption: String, CaseIterable, Codable {
     var flag: String {
         displayName.split(separator: " ", maxSplits: 1).first.map(String.init) ?? ""
     }
+
+    /// Short uppercase code for compact chips (e.g. "EN").
+    var shortCode: String { code.uppercased() }
+
+    /// Languages the user has configured at the OS level, most preferred first.
+    static var systemLanguages: [LanguageOption] {
+        var seen = Set<LanguageOption>()
+        return Locale.preferredLanguages.compactMap { identifier -> LanguageOption? in
+            let base = identifier.split(separator: "-").first.map(String.init)?.lowercased() ?? identifier
+            guard let option = LanguageOption(rawValue: base), !seen.contains(option) else { return nil }
+            seen.insert(option)
+            return option
+        }
+    }
+
+    /// Fallback quick-pick list when the user has no language history yet:
+    /// the OS languages first, then a few common ones.
+    static var commonLanguages: [LanguageOption] {
+        var result = systemLanguages
+        for option in [LanguageOption.english, .german, .french, .spanish] where !result.contains(option) {
+            result.append(option)
+        }
+        return result
+    }
+}
+
+// MARK: - RecentLanguages
+
+/// Most-recently-used languages (shared between the spoken-language hint and
+/// translation targets), newest first.
+enum RecentLanguagesStore {
+    private static let key = "languages.recent"
+    static let maxEntries = 6
+
+    static func load() -> [LanguageOption] {
+        guard let raw = UserDefaults.standard.stringArray(forKey: key) else { return [] }
+        var seen = Set<LanguageOption>()
+        return raw.compactMap { LanguageOption(rawValue: $0) }.filter { seen.insert($0).inserted }
+    }
+
+    static func save(_ languages: [LanguageOption]) {
+        UserDefaults.standard.set(languages.prefix(maxEntries).map(\.rawValue), forKey: key)
+    }
+
+    /// Moves `language` to the front of `recents`, dropping duplicates and trimming.
+    static func bump(_ language: LanguageOption, in recents: [LanguageOption]) -> [LanguageOption] {
+        var result = recents.filter { $0 != language }
+        result.insert(language, at: 0)
+        return Array(result.prefix(maxEntries))
+    }
+
+    /// The languages to offer as quick picks: recents when available, otherwise
+    /// the common/system fallback, padded with common languages up to `count`.
+    static func quickPicks(from recents: [LanguageOption], count: Int) -> [LanguageOption] {
+        var result = Array(recents.prefix(count))
+        if result.count < count {
+            for option in LanguageOption.commonLanguages where !result.contains(option) {
+                result.append(option)
+                if result.count == count { break }
+            }
+        }
+        return result
+    }
+}
+
+// MARK: - ModifierKey
+
+/// A physical modifier key, identified by its hardware key code so that the left
+/// and right variants can be told apart (macOS reports them with distinct codes
+/// in `flagsChanged` events even though the generic modifier flag is the same).
+enum ModifierKey: UInt32, CaseIterable, Codable {
+    case leftCommand  = 55
+    case rightCommand = 54
+    case leftShift    = 56
+    case rightShift   = 60
+    case leftOption   = 58
+    case rightOption  = 61
+    case leftControl  = 59
+    case rightControl = 62
+
+    var isRight: Bool {
+        switch self {
+        case .rightCommand, .rightShift, .rightOption, .rightControl: return true
+        default: return false
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .leftCommand, .rightCommand: return "⌘"
+        case .leftShift, .rightShift:     return "⇧"
+        case .leftOption, .rightOption:   return "⌥"
+        case .leftControl, .rightControl: return "⌃"
+        }
+    }
+
+    /// Carbon modifier mask this key contributes to.
+    var carbonMask: UInt32 {
+        switch self {
+        case .leftCommand, .rightCommand: return UInt32(cmdKey)
+        case .leftShift, .rightShift:     return UInt32(shiftKey)
+        case .leftOption, .rightOption:   return UInt32(optionKey)
+        case .leftControl, .rightControl: return UInt32(controlKey)
+        }
+    }
+
+    /// Generic CGEvent flag for this modifier (same for both sides).
+    var cgFlag: CGEventFlags {
+        switch self {
+        case .leftCommand, .rightCommand: return .maskCommand
+        case .leftShift, .rightShift:     return .maskShift
+        case .leftOption, .rightOption:   return .maskAlternate
+        case .leftControl, .rightControl: return .maskControl
+        }
+    }
+
+    /// Device-specific flag bit (from IOKit's IOLLEvent.h) that identifies the
+    /// exact side. Not every keyboard sets these, so callers fall back to `cgFlag`.
+    var deviceFlagBit: UInt64 {
+        switch self {
+        case .leftControl:  return 0x0000_0001
+        case .leftShift:    return 0x0000_0002
+        case .rightShift:   return 0x0000_0004
+        case .leftCommand:  return 0x0000_0008
+        case .rightCommand: return 0x0000_0010
+        case .leftOption:   return 0x0000_0020
+        case .rightOption:  return 0x0000_0040
+        case .rightControl: return 0x0000_2000
+        }
+    }
+
+    /// Display order used when rendering chords: ⌃ ⌥ ⇧ ⌘ (macOS convention).
+    var sortOrder: Int {
+        switch self {
+        case .leftControl, .rightControl: return 0
+        case .leftOption, .rightOption:   return 1
+        case .leftShift, .rightShift:     return 2
+        case .leftCommand, .rightCommand: return 3
+        }
+    }
 }
 
 // MARK: - HotKey
 
+/// A global shortcut. Three shapes are supported:
+///  - the bare fn/Globe key (`isFnKey`)
+///  - one or more modifier keys with no regular key (`isModifierOnly`), optionally
+///    pinned to a specific side via `modifierKeys` (e.g. right ⌘ only)
+///  - a regular key plus modifiers, also optionally side-specific
 struct HotKey: Codable, Equatable {
     var keyCode: UInt32
+    /// Generic Carbon modifier mask (side-agnostic). Always kept in sync with
+    /// `modifierKeys` when those are present.
     var modifiers: UInt32
     var isFnKey: Bool
     var isModifierOnly: Bool
+    /// Exact modifier keys (left/right aware). Empty for legacy shortcuts recorded
+    /// before side tracking existed; those match either side.
+    var modifierKeys: [ModifierKey]
 
-    init(keyCode: UInt32, modifiers: UInt32, isFnKey: Bool = false, isModifierOnly: Bool = false) {
+    init(
+        keyCode: UInt32,
+        modifiers: UInt32,
+        isFnKey: Bool = false,
+        isModifierOnly: Bool = false,
+        modifierKeys: [ModifierKey] = []
+    ) {
         self.keyCode = keyCode
         self.modifiers = modifiers
         self.isFnKey = isFnKey
         self.isModifierOnly = isModifierOnly
+        self.modifierKeys = HotKey.sorted(modifierKeys)
     }
 
     init(from decoder: Decoder) throws {
@@ -242,21 +399,63 @@ struct HotKey: Codable, Equatable {
         modifiers = try container.decode(UInt32.self, forKey: .modifiers)
         isFnKey = try container.decodeIfPresent(Bool.self, forKey: .isFnKey) ?? false
         isModifierOnly = try container.decodeIfPresent(Bool.self, forKey: .isModifierOnly) ?? false
+        modifierKeys = HotKey.sorted(try container.decodeIfPresent([ModifierKey].self, forKey: .modifierKeys) ?? [])
     }
 
-    static let defaultValue = HotKey(keyCode: 63, modifiers: 0, isFnKey: true) // fn key
+    static let fnKey = HotKey(keyCode: 63, modifiers: 0, isFnKey: true)
+    static let rightCommand = HotKey(
+        keyCode: 0,
+        modifiers: UInt32(cmdKey),
+        isModifierOnly: true,
+        modifierKeys: [.rightCommand]
+    )
+
+    /// Default push-to-talk shortcut: hold fn.
+    static let defaultPushToTalk = HotKey.fnKey
+    /// Default handsfree shortcut: tap right ⌘ (never does anything on its own in macOS).
+    static let defaultHandsfree = HotKey.rightCommand
+
+    /// Kept for source compatibility with older call sites.
+    static let defaultValue = HotKey.fnKey
+
+    var isSideSpecific: Bool { !modifierKeys.isEmpty }
+
+    /// Two shortcuts conflict when one would always fire alongside the other.
+    func conflicts(with other: HotKey) -> Bool {
+        if self == other { return true }
+        if isFnKey || other.isFnKey { return isFnKey && other.isFnKey }
+        guard keyCode == other.keyCode, isModifierOnly == other.isModifierOnly, modifiers == other.modifiers else {
+            return false
+        }
+        // Same generic shape; a side-agnostic one overlaps with any side-specific one.
+        return modifierKeys.isEmpty || other.modifierKeys.isEmpty
+    }
 
     var displayString: String {
         if isFnKey { return "fn" }
         var pieces: [String] = []
-        if modifiers & UInt32(cmdKey) != 0 { pieces.append("⌘") }
-        if modifiers & UInt32(shiftKey) != 0 { pieces.append("⇧") }
-        if modifiers & UInt32(optionKey) != 0 { pieces.append("⌥") }
-        if modifiers & UInt32(controlKey) != 0 { pieces.append("⌃") }
+        if modifierKeys.isEmpty {
+            if modifiers & UInt32(controlKey) != 0 { pieces.append("⌃") }
+            if modifiers & UInt32(optionKey) != 0 { pieces.append("⌥") }
+            if modifiers & UInt32(shiftKey) != 0 { pieces.append("⇧") }
+            if modifiers & UInt32(cmdKey) != 0 { pieces.append("⌘") }
+        } else {
+            let allRight = modifierKeys.allSatisfy(\.isRight)
+            let allLeft = modifierKeys.allSatisfy { !$0.isRight }
+            if allRight || allLeft {
+                pieces.append((allRight ? "Right " : "Left ") + modifierKeys.map(\.symbol).joined())
+            } else {
+                pieces.append(modifierKeys.map { ($0.isRight ? "R" : "L") + $0.symbol }.joined(separator: "+"))
+            }
+        }
         if !isModifierOnly {
             pieces.append(KeyCodeMap.displayName(for: keyCode))
         }
-        return pieces.joined(separator: "")
+        return pieces.joined(separator: pieces.count > 1 && isSideSpecific ? " " : "")
+    }
+
+    private static func sorted(_ keys: [ModifierKey]) -> [ModifierKey] {
+        Array(Set(keys)).sorted { ($0.sortOrder, $0.isRight ? 1 : 0) < ($1.sortOrder, $1.isRight ? 1 : 0) }
     }
 }
 
@@ -321,6 +520,37 @@ enum KeyCodeMap {
         case 46: return "M"
         case 47: return "."
         case 50: return "`"
+        case 36: return "↩"
+        case 48: return "⇥"
+        case 49: return "Space"
+        case 51: return "⌫"
+        case 53: return "⎋"
+        case 76: return "⌤"
+        case 96: return "F5"
+        case 97: return "F6"
+        case 98: return "F7"
+        case 99: return "F3"
+        case 100: return "F8"
+        case 101: return "F9"
+        case 103: return "F11"
+        case 105: return "F13"
+        case 107: return "F14"
+        case 109: return "F10"
+        case 111: return "F12"
+        case 113: return "F15"
+        case 114: return "Help"
+        case 115: return "↖"
+        case 116: return "⇞"
+        case 117: return "⌦"
+        case 118: return "F4"
+        case 119: return "↘"
+        case 120: return "F2"
+        case 121: return "⇟"
+        case 122: return "F1"
+        case 123: return "←"
+        case 124: return "→"
+        case 125: return "↓"
+        case 126: return "↑"
         default: return "Key\(keyCode)"
         }
     }
@@ -328,6 +558,8 @@ enum KeyCodeMap {
 
 // MARK: - RecordingMode
 
+/// How the current recording was started. Each mode has its own shortcut, so this
+/// is per-session state rather than a user setting.
 enum RecordingMode: String, CaseIterable, Codable {
     case pushToTalk = "pushToTalk"
     case handsfree  = "handsfree"
@@ -491,7 +723,10 @@ final class UserSettings {
     private enum Key {
         static let apiKey              = "gemini.apiKey"
         static let geminiModel         = "gemini.model"
-        static let hotKey              = "app.hotKey"
+        static let legacyHotKey        = "app.hotKey"
+        static let pushToTalkHotKey    = "app.pushToTalkHotKey"
+        static let handsfreeHotKey     = "app.handsfreeHotKey"
+        static let spokenLanguage      = "dictation.spokenLanguage"
         static let outputMode          = "dictation.outputMode"
         static let customPrompt        = "dictation.customPrompt"
         static let customPostPrompts   = "postProcessing.customPrompts"
@@ -501,7 +736,7 @@ final class UserSettings {
         static let translationLanguage = "dictation.translationLanguage"
         static let favoriteTranslationLanguage1 = "postProcessing.favoriteTranslationLanguage1"
         static let favoriteTranslationLanguage2 = "postProcessing.favoriteTranslationLanguage2"
-        static let recordingMode       = "app.recordingMode"
+        static let legacyRecordingMode = "app.recordingMode"
         static let handsfreeMaxSeconds = "app.handsfreeMaxSeconds"
         static let legacyHandsfreeMaxMinutes = "app.handsfreeMaxMinutes"
     }
@@ -512,7 +747,12 @@ final class UserSettings {
 
     var apiKey = ""
     var geminiModel: GeminiModel = .defaultValue
-    var hotKey = HotKey.defaultValue
+    /// Hold to record, release to insert. `nil` disables push-to-talk.
+    var pushToTalkHotKey: HotKey? = HotKey.defaultPushToTalk
+    /// Tap to start, tap again (or Esc) to stop. `nil` disables handsfree.
+    var handsfreeHotKey: HotKey? = HotKey.defaultHandsfree
+    /// Language the user says they are speaking; `nil` lets Gemini auto-detect.
+    var spokenLanguage: LanguageOption?
     var outputMode: TranscriptionOutputMode = .corrected
     var customPrompt: String = TranscriptionOutputMode.defaultCustomPrompt
     var customPostProcessingPrompts: [CustomPostProcessingPrompt] = []
@@ -522,7 +762,6 @@ final class UserSettings {
     var translationLanguage: LanguageOption = .english
     var favoriteTranslationLanguage1: LanguageOption = .english
     var favoriteTranslationLanguage2: LanguageOption = .german
-    var recordingMode: RecordingMode = .handsfree
     var handsfreeMaxSeconds: Int = UserSettings.defaultHandsfreeSeconds
 
     func load() {
@@ -536,10 +775,9 @@ final class UserSettings {
             geminiModel = .defaultValue
         }
 
-        if let data = defaults.data(forKey: Key.hotKey),
-           let decoded = try? JSONDecoder().decode(HotKey.self, from: data)
-        {
-            hotKey = decoded
+        loadHotKeys(from: defaults)
+        if let raw = defaults.string(forKey: Key.spokenLanguage) {
+            spokenLanguage = LanguageOption(rawValue: raw)
         }
         if let raw = defaults.string(forKey: Key.outputMode),
            let mode = TranscriptionOutputMode(rawValue: raw)
@@ -589,11 +827,6 @@ final class UserSettings {
         {
             favoriteTranslationLanguage2 = option
         }
-        if let raw = defaults.string(forKey: Key.recordingMode),
-           let mode = RecordingMode(rawValue: raw)
-        {
-            recordingMode = mode
-        }
         if defaults.object(forKey: Key.handsfreeMaxSeconds) != nil {
             handsfreeMaxSeconds = Self.clampHandsfreeSeconds(defaults.integer(forKey: Key.handsfreeMaxSeconds))
         } else if defaults.object(forKey: Key.legacyHandsfreeMaxMinutes) != nil {
@@ -617,10 +850,50 @@ final class UserSettings {
         defaults.set(translationLanguage.rawValue, forKey: Key.translationLanguage)
         defaults.set(favoriteTranslationLanguage1.rawValue, forKey: Key.favoriteTranslationLanguage1)
         defaults.set(favoriteTranslationLanguage2.rawValue, forKey: Key.favoriteTranslationLanguage2)
-        defaults.set(recordingMode.rawValue, forKey: Key.recordingMode)
         defaults.set(Self.clampHandsfreeSeconds(handsfreeMaxSeconds), forKey: Key.handsfreeMaxSeconds)
-        if let data = try? JSONEncoder().encode(hotKey) {
-            defaults.set(data, forKey: Key.hotKey)
+        Self.store(pushToTalkHotKey, forKey: Key.pushToTalkHotKey, in: defaults)
+        Self.store(handsfreeHotKey, forKey: Key.handsfreeHotKey, in: defaults)
+        defaults.set(spokenLanguage?.rawValue, forKey: Key.spokenLanguage)
+    }
+
+    /// Loads both shortcuts, migrating from the single pre-3.5 shortcut + mode
+    /// setting the first time. A stored empty value means "disabled".
+    private func loadHotKeys(from defaults: UserDefaults) {
+        let hasNewKeys = defaults.object(forKey: Key.pushToTalkHotKey) != nil
+            || defaults.object(forKey: Key.handsfreeHotKey) != nil
+        if hasNewKeys {
+            pushToTalkHotKey = Self.hotKey(forKey: Key.pushToTalkHotKey, in: defaults)
+            handsfreeHotKey = Self.hotKey(forKey: Key.handsfreeHotKey, in: defaults)
+            return
+        }
+
+        // Migration from the single-shortcut era.
+        pushToTalkHotKey = HotKey.defaultPushToTalk
+        handsfreeHotKey = HotKey.defaultHandsfree
+        guard let data = defaults.data(forKey: Key.legacyHotKey),
+              let legacy = try? JSONDecoder().decode(HotKey.self, from: data),
+              !legacy.isFnKey // fn stays the push-to-talk default
+        else { return }
+        let legacyMode = defaults.string(forKey: Key.legacyRecordingMode).flatMap(RecordingMode.init(rawValue:)) ?? .handsfree
+        switch legacyMode {
+        case .handsfree:
+            handsfreeHotKey = legacy
+        case .pushToTalk:
+            pushToTalkHotKey = legacy
+            if legacy.conflicts(with: HotKey.defaultHandsfree) { handsfreeHotKey = nil }
+        }
+    }
+
+    private static func hotKey(forKey key: String, in defaults: UserDefaults) -> HotKey? {
+        guard let data = defaults.data(forKey: key), !data.isEmpty else { return nil }
+        return try? JSONDecoder().decode(HotKey.self, from: data)
+    }
+
+    private static func store(_ hotKey: HotKey?, forKey key: String, in defaults: UserDefaults) {
+        if let hotKey, let data = try? JSONEncoder().encode(hotKey) {
+            defaults.set(data, forKey: key)
+        } else {
+            defaults.set(Data(), forKey: key) // explicit "disabled" marker
         }
     }
 

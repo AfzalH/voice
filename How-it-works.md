@@ -76,40 +76,52 @@ If no API key is saved, the settings window opens automatically on launch so the
 
 **File:** `InputMonitors.swift`
 
-The app supports two fundamentally different kinds of hotkeys: regular key + modifier combinations (e.g. `⌥Z`), and the bare Fn key. Each requires a different OS mechanism.
+The app has two independent global shortcuts, both handled by one `GlobalHotKeyMonitor`:
 
-### Regular Hotkeys — Carbon Event Handler
+| Shortcut | Default | Semantics |
+|---|---|---|
+| Push to talk | `fn` (hold) | Recording starts on press and is committed on release. |
+| Handsfree | `Right ⌘` (tap) | A tap toggles recording on/off. |
 
-For standard key + modifier combos, the app uses Carbon's `RegisterEventHotKey` API. This registers a system-wide hotkey that fires even when the app is not focused. The event handler is installed on the application event target and listens for `kEventHotKeyPressed`. When triggered, it fires the `onKeyDown` callback.
+Either one can be disabled (`nil`), and the Settings recorder refuses to save when both are the same key.
 
-**Key-up detection** cannot be done through Carbon (it only delivers press, not release). Instead, immediately after `onKeyDown` fires, a CGEvent tap is created listening for `keyUp` events. The tap matches on the registered key code. When the matching key-up arrives, `onKeyUp` fires and the tap is torn down.
+### One CGEvent tap for everything
+
+A single active (`.defaultTap`) session-level CGEvent tap listens for `keyDown`, `keyUp`, and `flagsChanged`. Because the tap is active rather than listen-only, matching key+modifier events (e.g. `⌥Space`) are swallowed (`return nil`) so the frontmost app does not also receive them. Modifier and fn events are never swallowed. A watchdog timer re-enables the tap if macOS disables it.
+
+### Three shapes of `HotKey`
+
+1. **fn/Globe** (`isFnKey`) — key code 63. Arrives as `flagsChanged` with `maskSecondaryFn`, or as `keyDown`/`keyUp` on some configurations. Both paths update a single `fnIsDown` flag.
+2. **Modifier-only chord** (`isModifierOnly`) — e.g. `Right ⌘`, `⌃⌥`. Evaluated on every `flagsChanged`. The generic Carbon mask must match exactly, and for side-specific chords the device-specific flag bits (`NX_DEVICERCMDKEYMASK` etc., in the low bits of `CGEventFlags`) must show the required side. Keyboards that report no side bits match either side.
+3. **Key + modifiers** — e.g. `⌥Space`, or a bare function key. Engages on `keyDown` with an exact modifier match, releases on `keyUp` or when a required modifier lifts. Auto-repeat events are swallowed.
+
+### Push-to-talk state machine
 
 ```
-RegisterEventHotKey → kEventHotKeyPressed → onKeyDown() → create CGEvent keyUp tap
-                                                                    ↓
-                                                          keyUp event → onKeyUp() → tear down tap
+press ──▶ engaged (onPushToTalkBegan → audio capture starts immediately)
+  │
+  ├── other key pressed / extra modifier added ──▶ onPushToTalkEnded(cancelled: true)
+  ├── released < 200 ms (tap)                   ──▶ onPushToTalkEnded(cancelled: true)
+  └── released ≥ 200 ms                          ──▶ onPushToTalkEnded(cancelled: false) → transcribe
 ```
 
-### Fn Key — flagsChanged CGEvent Tap
+Audio capture starts on press so nothing is lost, but `AppModel` delays the "Tink" sound and the recording island until the press outlives `tapThreshold` (200 ms). A cancelled press is therefore completely silent: tapping `fn` to switch input source, or pressing `fn`+`F1`, behaves exactly as if the app were not running.
 
-The Fn key (key code 63, `kVK_Function`) is a modifier key — it never fires `keyDown` or `keyUp` events. Instead, it fires `flagsChanged` events whenever the set of held modifier keys changes. Carbon's hotkey API cannot intercept it.
+### Handsfree state machine
 
-The app creates a permanent CGEvent tap listening for `flagsChanged` events. Inside the callback:
+For modifier-based shortcuts the toggle fires on **release**, and only if no other key was pressed and no extra modifier was added while the chord was held. Holding `Right ⌘` and pressing `C` is therefore a normal copy, never a recording toggle. For key+modifier shortcuts the toggle fires directly on `keyDown`.
 
-1. Filter to only events with `keyboardEventKeycode == 63` (ignore Shift, Control, etc. firing their own flagsChanged events).
-2. Check if `CGEventFlags.maskSecondaryFn` is set in the event's flags.
-3. If the flag just appeared and wasn't set before → key was pressed → fire `onKeyDown`.
-4. If the flag just disappeared and was set before → key was released → fire `onKeyUp`.
+### Recording a shortcut in Settings
 
-A `fnKeyIsDown: Bool` property tracks the previous state to avoid duplicate callbacks when other modifiers change while Fn is held.
+`HotKeyRecorderField` installs a local `NSEvent` monitor for `keyDown` and `flagsChanged`. Each `flagsChanged` event carries the key code of the physical modifier that changed (55 = left ⌘, 54 = right ⌘, …), which the recorder uses to maintain a side-aware set of held modifiers. Releasing the chord without having pressed a regular key records a modifier-only shortcut; pressing a regular key records a key+modifier shortcut (side-agnostic, like normal macOS shortcuts); function keys are accepted without modifiers. `⌫` clears the shortcut and `⎋` cancels recording.
 
 ### Escape Key — GlobalEscapeKeyMonitor
 
-A separate, always-on CGEvent tap listens for `keyDown` events with key code 53 (Escape). When detected while recording is active, it cancels the recording without transcribing.
+A separate, always-on CGEvent tap listens for `keyDown` events with key code 53 (Escape). While a handsfree recording is active it stops and transcribes; while a push-to-talk recording is active it cancels without transcribing.
 
 ### Why CGEvent Taps Instead of NSEvent.addGlobalMonitorForEvents
 
-The app uses listen-only CGEvent taps for hotkey and Escape monitoring so events are observed without being suppressed or blocked. On current macOS versions, the app checks Input Monitoring before registering those global taps and asks the user to grant it during setup.
+Global NSEvent monitors cannot see modifier side information reliably and cannot swallow events. CGEvent taps can do both. The app checks Input Monitoring before registering the taps and asks the user to grant it during setup.
 
 ---
 
@@ -290,7 +302,11 @@ All settings are stored in `UserDefaults.standard`:
 
 Older `dictation.customPrompt` values are migrated into the saved post-processing prompt list when possible.
 
-`HotKey` is a `Codable` struct with `keyCode`, `modifiers`, and `isFnKey`. The custom `init(from:)` decodes `isFnKey` with `decodeIfPresent` defaulting to `false`, so older saved hotkeys without that field continue to work.
+`HotKey` is a `Codable` struct with `keyCode`, `modifiers`, `isFnKey`, `isModifierOnly`, and `modifierKeys` (the side-specific physical keys). Optional fields decode with `decodeIfPresent`, so shortcuts saved by older versions still load. Shortcuts are stored under `app.pushToTalkHotKey` and `app.handsfreeHotKey` (an empty `Data` means "disabled"). On first launch after upgrading, the legacy single `app.hotKey` + `app.recordingMode` pair is migrated: the old shortcut becomes the shortcut for the mode it was used in, and the other slot receives the new default.
+
+### Spoken-language hint and recent languages
+
+`UserSettings.spokenLanguage` (`nil` = automatic) is passed to `GeminiTranscriptionClient`, which swaps the "detect the language" instruction in the transcription prompt for "the speaker is speaking X". `RecentLanguagesStore` keeps the last six languages chosen either as the spoken hint or as a translation target. The menu-bar popover shows the first four as chips (falling back to the OS languages plus English, German, French, and Spanish when the history is empty), and the post-processing bubble shows recents ahead of the two configured favourites.
 
 ### Fn Key Conflict Detection
 

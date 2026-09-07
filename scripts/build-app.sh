@@ -8,7 +8,7 @@ APP_DIR="$DIST_DIR/$APP_NAME.app"
 EXECUTABLE_NAME="SrizonVoice"
 EXECUTABLE_DEST="$APP_DIR/Contents/MacOS/$EXECUTABLE_NAME"
 PLIST_PATH="$APP_DIR/Contents/Info.plist"
-VERSION="3.4.0"
+VERSION="3.5.0"
 BUILD_NUMBER="11"
 read -r -a ARCHS <<< "${SRIZONVOICE_ARCHS:-arm64 x86_64}"
 
@@ -110,9 +110,33 @@ sed -i '' \
   -e "s/__BUILD_NUMBER__/$BUILD_NUMBER/g" \
   "$PLIST_PATH"
 
+# -- Code signing --
+# macOS ties Accessibility / Input Monitoring / Microphone grants to the app's
+# code signature. An ad-hoc signature changes on every build, which makes the
+# grants stale after each upgrade. Signing with a stable identity (an Apple
+# Development certificate or a self-signed code-signing certificate) keeps the
+# permissions across rebuilds. Override with CODESIGN_IDENTITY, e.g.
+#   CODESIGN_IDENTITY="Apple Development: Jane Doe (TEAMID)" scripts/build-app.sh
+#   CODESIGN_IDENTITY=- scripts/build-app.sh   # force ad-hoc
 if command -v codesign >/dev/null 2>&1; then
-  echo "Applying ad-hoc signature..."
-  codesign --force --deep --sign - "$APP_DIR"
+  IDENTITY="${CODESIGN_IDENTITY:-}"
+  if [[ -z "$IDENTITY" ]]; then
+    # Prefer a distribution certificate, fall back to a development one.
+    for pattern in 'Developer ID Application' 'Apple Development' 'Mac Developer'; do
+      IDENTITY="$(security find-identity -v -p codesigning 2>/dev/null \
+        | { grep -E "$pattern" || true; } | head -1 | sed -E 's/.*"(.*)"/\1/')"
+      if [[ -n "$IDENTITY" ]]; then break; fi
+    done
+  fi
+  if [[ -n "$IDENTITY" && "$IDENTITY" != "-" ]]; then
+    echo "Signing with identity: $IDENTITY"
+    ENTITLEMENTS="$ROOT_DIR/scripts/SrizonVoice.entitlements"
+    codesign --force --deep --options runtime --timestamp \
+      --entitlements "$ENTITLEMENTS" --sign "$IDENTITY" "$APP_DIR"
+  else
+    echo "Applying ad-hoc signature (permissions will need re-granting after each rebuild)..."
+    codesign --force --deep --sign - "$APP_DIR"
+  fi
 fi
 
 echo "App bundle created at:"

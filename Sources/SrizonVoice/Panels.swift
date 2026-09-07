@@ -3,7 +3,11 @@ import SwiftUI
 
 // MARK: - RecordingIslandController
 
+/// Small black pill just above the Dock, ChatGPT-voice-mode style: a row of
+/// white dots that grow into bars with the microphone level while recording,
+/// and pulse in sequence while transcribing.
 final class RecordingIslandController: NSObject {
+    static let size = NSSize(width: 132, height: 52)
     private var panel: NSPanel?
     private var islandView: RecordingIslandView?
 
@@ -12,23 +16,27 @@ final class RecordingIslandController: NSObject {
             createPanel()
         }
         guard let panel else { return }
-        
-        if let screen = NSScreen.main ?? NSScreen.screens.first {
-            let frame = screen.visibleFrame
-            let width: CGFloat = 320
-            let height: CGFloat = 36
-            let x = frame.midX - width / 2
-            let y = frame.maxY - 48
-            panel.setFrame(NSRect(x: x, y: y, width: width, height: height), display: true)
-        }
+        position(panel)
         islandView?.setTranscribing(false)
         islandView?.startAnimating()
+        panel.alphaValue = 0
         panel.orderFrontRegardless()
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.18
+            panel.animator().alphaValue = 1
+        }
     }
 
     func hide() {
         islandView?.stopAnimating()
-        panel?.orderOut(nil)
+        guard let panel else { return }
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.15
+            panel.animator().alphaValue = 0
+        }, completionHandler: {
+            // A new show() may have started during the fade; only hide if it didn't.
+            if panel.alphaValue == 0 { panel.orderOut(nil) }
+        })
     }
 
     func updateLevel(_ level: Float) {
@@ -36,12 +44,25 @@ final class RecordingIslandController: NSObject {
     }
 
     func showTranscribing() {
+        if panel?.isVisible != true { show() }
         islandView?.setTranscribing(true)
+        islandView?.startAnimating()
+    }
+
+    /// Centered horizontally, sitting just above the Dock (or the bottom edge
+    /// when the Dock is hidden or on the side).
+    private func position(_ panel: NSPanel) {
+        guard let screen = NSScreen.main ?? NSScreen.screens.first else { return }
+        let visible = screen.visibleFrame
+        let size = Self.size
+        let x = visible.midX - size.width / 2
+        let y = visible.minY + 10
+        panel.setFrame(NSRect(x: x, y: y, width: size.width, height: size.height), display: true)
     }
 
     private func createPanel() {
         let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 320, height: 36),
+            contentRect: NSRect(origin: .zero, size: Self.size),
             styleMask: [.nonactivatingPanel, .borderless],
             backing: .buffered,
             defer: false
@@ -50,13 +71,14 @@ final class RecordingIslandController: NSObject {
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = true
-        panel.collectionBehavior = [.canJoinAllSpaces, .transient, .ignoresCycle]
+        panel.ignoresMouseEvents = true
+        panel.collectionBehavior = [.canJoinAllSpaces, .transient, .ignoresCycle, .fullScreenAuxiliary]
         panel.hidesOnDeactivate = false
 
         let islandView = RecordingIslandView(frame: panel.contentView?.bounds ?? .zero)
         islandView.autoresizingMask = [.width, .height]
         panel.contentView = islandView
-        
+
         self.islandView = islandView
         self.panel = panel
     }
@@ -65,34 +87,39 @@ final class RecordingIslandController: NSObject {
 // MARK: - RecordingIslandView
 
 final class RecordingIslandView: NSView {
-    private var audioLevel: Float = 0.0
-    private var smoothedLevel: Float = 0.12
-    private var animationPhase: CGFloat = 0
+    private static let dotCount = 6
+    /// Bars are thin and tightly packed, like the ChatGPT voice pill.
+    private static let dotSize: CGFloat = 3.5
+    private static let dotSpacing: CGFloat = 4.5
+    private static let maxBarHeight: CGFloat = 22
+    /// Warm near-black pill and almond-silk bars from the SrizonVoice palette.
+    private static let pillColor = NSColor(hex: 0x15110E, alpha: 0.96)
+    private static let barColor = NSColor.voiceAlmondSilk
+
+    private var audioLevel: Float = 0
+    private var smoothedLevel: Float = 0
+    /// Per-dot heights in 0...1 (0 = resting dot, 1 = full bar), eased every frame.
+    private var barValues: [CGFloat] = Array(repeating: 0, count: RecordingIslandView.dotCount)
+    private var targetValues: [CGFloat] = Array(repeating: 0, count: RecordingIslandView.dotCount)
+    private var phase: CGFloat = 0
     private var frameCounter = 0
-    private var barCount = 34
-    private var barValues: [Float] = []
     private var displayLink: CVDisplayLink?
     private var isTranscribing = false
-    private var transcribingDots = 0
-    private var transcribingTimer: Timer?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
-        barValues = Array(repeating: 0.1, count: barCount)
+        wantsLayer = true
         setupDisplayLink()
     }
 
     required init?(coder: NSCoder) {
         super.init(coder: coder)
-        barValues = Array(repeating: 0.1, count: barCount)
+        wantsLayer = true
         setupDisplayLink()
     }
 
     deinit {
-        if let displayLink = displayLink {
-            CVDisplayLinkStop(displayLink)
-        }
-        transcribingTimer?.invalidate()
+        if let displayLink { CVDisplayLinkStop(displayLink) }
     }
 
     func updateLevel(_ level: Float) {
@@ -102,16 +129,7 @@ final class RecordingIslandView: NSView {
     func setTranscribing(_ transcribing: Bool) {
         isTranscribing = transcribing
         if transcribing {
-            transcribingDots = 0
-            transcribingTimer?.invalidate()
-            transcribingTimer = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: true) { [weak self] _ in
-                guard let self else { return }
-                self.transcribingDots = (self.transcribingDots + 1) % 4
-                self.needsDisplay = true
-            }
-        } else {
-            transcribingTimer?.invalidate()
-            transcribingTimer = nil
+            targetValues = Array(repeating: 0, count: Self.dotCount)
         }
         needsDisplay = true
     }
@@ -119,153 +137,92 @@ final class RecordingIslandView: NSView {
     private func setupDisplayLink() {
         var displayLink: CVDisplayLink?
         CVDisplayLinkCreateWithActiveCGDisplays(&displayLink)
-        
         guard let link = displayLink else { return }
-        
+
         let callback: CVDisplayLinkOutputCallback = { _, _, _, _, _, userInfo -> CVReturn in
-            guard let userInfo = userInfo else { return kCVReturnSuccess }
+            guard let userInfo else { return kCVReturnSuccess }
             let view = Unmanaged<RecordingIslandView>.fromOpaque(userInfo).takeUnretainedValue()
-            DispatchQueue.main.async {
-                view.animateBars()
-            }
+            DispatchQueue.main.async { view.tick() }
             return kCVReturnSuccess
         }
-        
-        let userInfo = Unmanaged.passUnretained(self).toOpaque()
-        CVDisplayLinkSetOutputCallback(link, callback, userInfo)
+        CVDisplayLinkSetOutputCallback(link, callback, Unmanaged.passUnretained(self).toOpaque())
         self.displayLink = link
     }
 
-    /// Starts the waveform animation. Called when the island becomes visible so the
-    /// display link isn't left running (and burning CPU) while idle in the menu bar.
+    /// Starts the animation. Only runs while the island is visible so no CPU is
+    /// spent while idle in the menu bar.
     func startAnimating() {
         guard let displayLink, !CVDisplayLinkIsRunning(displayLink) else { return }
         CVDisplayLinkStart(displayLink)
     }
 
-    /// Stops the waveform animation and the transcribing ticker when hidden.
     func stopAnimating() {
         if let displayLink, CVDisplayLinkIsRunning(displayLink) {
             CVDisplayLinkStop(displayLink)
         }
-        transcribingTimer?.invalidate()
-        transcribingTimer = nil
+        barValues = Array(repeating: 0, count: Self.dotCount)
+        targetValues = barValues
+        smoothedLevel = 0
     }
 
-    private func animateBars() {
-        guard !isTranscribing else { return }
-
+    private func tick() {
         frameCounter += 1
-        smoothedLevel = smoothedLevel * 0.92 + audioLevel * 0.08
-        animationPhase += 0.035
+        phase += isTranscribing ? 0.09 : 0.05
 
-        guard frameCounter % 3 == 0 else {
-            needsDisplay = true
-            return
+        if !isTranscribing {
+            // Fast attack, slower release, so speech onsets feel responsive.
+            let attack: Float = audioLevel > smoothedLevel ? 0.35 : 0.08
+            smoothedLevel += (audioLevel - smoothedLevel) * attack
+
+            if frameCounter % 4 == 0 {
+                // Each dot gets its own target around the current level so the
+                // row looks alive rather than a uniform block. Silence → flat dots.
+                let level = CGFloat(min(smoothedLevel * 1.6, 1))
+                for index in 0..<Self.dotCount {
+                    let seed = CGFloat(index) * 1.7
+                    let wobble = (sin(phase * 2.3 + seed) + sin(phase * 3.7 + seed * 0.6)) * 0.25 + 0.5 // 0...1
+                    let centerBias = 1 - abs(CGFloat(index) - CGFloat(Self.dotCount - 1) / 2) / CGFloat(Self.dotCount) * 0.6
+                    let value = level * (0.45 + 0.55 * wobble) * centerBias
+                    targetValues[index] = level < 0.04 ? 0 : min(max(value, 0.12), 1)
+                }
+            }
         }
 
-        let breath = (sin(animationPhase) + 1) * 0.5
-        let level = CGFloat(smoothedLevel)
-        let newValue = 0.14 + level * 0.62 + CGFloat(breath) * 0.08
-        barValues.removeFirst()
-        barValues.append(Float(min(max(newValue, 0.12), 0.86)))
+        for index in 0..<Self.dotCount {
+            barValues[index] += (targetValues[index] - barValues[index]) * 0.25
+        }
         needsDisplay = true
     }
 
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
-        
-        let pillPath = NSBezierPath(roundedRect: bounds, xRadius: bounds.height / 2, yRadius: bounds.height / 2)
-        NSColor(hex: 0x1F2A2A, alpha: 0.94).setFill()
-        pillPath.fill()
 
-        if isTranscribing {
-            drawTranscribingState()
-        } else {
-            drawWaveform()
+        let pill = NSBezierPath(roundedRect: bounds, xRadius: bounds.height / 2, yRadius: bounds.height / 2)
+        Self.pillColor.setFill()
+        pill.fill()
+
+        let totalWidth = CGFloat(Self.dotCount) * Self.dotSize + CGFloat(Self.dotCount - 1) * Self.dotSpacing
+        let startX = (bounds.width - totalWidth) / 2
+        let midY = bounds.midY
+
+        for index in 0..<Self.dotCount {
+            let x = startX + CGFloat(index) * (Self.dotSize + Self.dotSpacing)
+            let height: CGFloat
+            let alpha: CGFloat
+            if isTranscribing {
+                // Travelling pulse: dots brighten one after another while we wait.
+                let wave = (sin(phase - CGFloat(index) * 0.75) + 1) / 2
+                height = Self.dotSize
+                alpha = 0.3 + 0.7 * wave
+            } else {
+                height = Self.dotSize + barValues[index] * (Self.maxBarHeight - Self.dotSize)
+                // Taller bars glow slightly brighter.
+                alpha = 0.78 + 0.22 * barValues[index]
+            }
+            let rect = NSRect(x: x, y: midY - height / 2, width: Self.dotSize, height: height)
+            Self.barColor.withAlphaComponent(alpha).setFill()
+            NSBezierPath(roundedRect: rect, xRadius: Self.dotSize / 2, yRadius: Self.dotSize / 2).fill()
         }
-    }
-
-    private func drawTranscribingState() {
-        let text = "Transcribing"
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: 13, weight: .medium),
-            .foregroundColor: NSColor(hex: 0xDCE9E9, alpha: 0.92),
-        ]
-        let attrString = NSAttributedString(string: text, attributes: attributes)
-        let textSize = attrString.size()
-        let x = (bounds.width - textSize.width) / 2
-        let y = (bounds.height - textSize.height) / 2
-        attrString.draw(at: NSPoint(x: x, y: y))
-
-        // Draw a small spinning indicator on the left
-        let indicatorSize: CGFloat = 14
-        let indicatorX: CGFloat = 16
-        let indicatorY = (bounds.height - indicatorSize) / 2
-        let indicatorRect = NSRect(x: indicatorX, y: indicatorY, width: indicatorSize, height: indicatorSize)
-        
-        NSColor.voiceAlmondSilk.withAlphaComponent(0.94).setStroke()
-        let arc = NSBezierPath()
-        let center = NSPoint(x: indicatorRect.midX, y: indicatorRect.midY)
-        let radius = indicatorSize / 2 - 1
-        let startAngle = CGFloat(transcribingDots) * 90.0
-        arc.appendArc(withCenter: center, radius: radius, startAngle: startAngle, endAngle: startAngle + 270, clockwise: false)
-        arc.lineWidth = 2
-        arc.stroke()
-    }
-
-    private func drawWaveform() {
-        let waveformWidth = bounds.width - 28
-        let waveformHeight = bounds.height - 14
-        let waveformY = (bounds.height - waveformHeight) / 2
-        let waveformRect = NSRect(x: 14, y: waveformY, width: waveformWidth, height: waveformHeight)
-        
-        let barWidth = waveformRect.width / CGFloat(barCount)
-        let spacing: CGFloat = 1.5
-        
-        let mistColor = NSColor.voiceAzureMist.withAlphaComponent(0.94)
-        let silkColor = NSColor.voiceAlmondSilk.withAlphaComponent(0.96)
-        let camelColor = NSColor.voiceCamel.withAlphaComponent(0.94)
-        
-        for (index, value) in barValues.enumerated() {
-            let progress = CGFloat(index) / CGFloat(max(1, barCount - 1))
-            let drift = sin(animationPhase + progress * .pi * 2.0) * 0.09
-            let counterDrift = sin(animationPhase * 0.58 + progress * .pi * 4.0) * 0.035
-            let heightValue = min(max(CGFloat(value) + drift + counterDrift, 0.12), 0.9)
-            let x = waveformRect.minX + CGFloat(index) * barWidth
-            let barHeight = heightValue * waveformRect.height
-            let y = waveformRect.minY + (waveformRect.height - barHeight) / 2
-            
-            let rect = CGRect(
-                x: x + spacing / 2,
-                y: y,
-                width: barWidth - spacing,
-                height: barHeight
-            )
-            
-            let barColor = Self.color(at: progress, start: mistColor, middle: silkColor, end: camelColor)
-            
-            barColor.setFill()
-            let path = NSBezierPath(roundedRect: rect, xRadius: 1, yRadius: 1)
-            path.fill()
-        }
-    }
-
-    private static func color(at progress: CGFloat, start: NSColor, middle: NSColor, end: NSColor) -> NSColor {
-        if progress < 0.5 {
-            return interpolate(from: start, to: middle, amount: progress * 2)
-        }
-        return interpolate(from: middle, to: end, amount: (progress - 0.5) * 2)
-    }
-
-    private static func interpolate(from start: NSColor, to end: NSColor, amount: CGFloat) -> NSColor {
-        let t = min(max(amount, 0), 1)
-        return NSColor(
-            red: start.redComponent * (1 - t) + end.redComponent * t,
-            green: start.greenComponent * (1 - t) + end.greenComponent * t,
-            blue: start.blueComponent * (1 - t) + end.blueComponent * t,
-            alpha: start.alphaComponent * (1 - t) + end.alphaComponent * t
-        )
     }
 }
 
@@ -695,10 +652,13 @@ struct PostProcessingPanelView: View {
                     model.run(.makeCompact)
                 }
             }
-            HStack(spacing: 8) {
-                ForEach(Array(model.favoriteTranslationLanguages.prefix(2).enumerated()), id: \.offset) { _, language in
-                    translationButton(language) {
-                        model.run(.translate(language))
+            // Quick translations: recent + favorite languages, two per row.
+            ForEach(Array(stride(from: 0, to: min(model.favoriteTranslationLanguages.count, 4), by: 2)), id: \.self) { start in
+                HStack(spacing: 8) {
+                    ForEach(model.favoriteTranslationLanguages[start..<min(start + 2, model.favoriteTranslationLanguages.count)], id: \.self) { language in
+                        translationButton(language) {
+                            model.run(.translate(language))
+                        }
                     }
                 }
             }

@@ -2,7 +2,7 @@
 
 Push-to-talk dictation app for macOS 12 Monterey and later using Gemini audio transcription, automatic spoken-language detection, and optional translation (BYOK).
 
-Press a hotkey to record, press it again to transcribe. Gemini detects the spoken language automatically, then SrizonVoice lets you choose a post-processing action before inserting the final text wherever your cursor was.
+Hold a key to dictate (push to talk), or tap another to record handsfree. Gemini detects the spoken language automatically (or follows the language hint you pick in the menu bar), then SrizonVoice lets you choose a post-processing action before inserting the final text wherever your cursor was.
 
 SrizonVoice is free. You only pay Google Gemini API usage through your own API key, which should be very low for typical dictation.
 
@@ -32,11 +32,12 @@ Checksums and older builds are available on [GitHub Releases](https://github.com
 
 ## Usage
 
-- **Press** the hotkey (default: `fn`) to start recording
-- **Press** it again to stop recording and transcribe
-- **Press Escape** while recording to stop and transcribe in handsfree mode
+- **Hold** the push-to-talk key (default: `fn`) to record, **release** to transcribe and insert. A quick tap or `fn`+another key is ignored, so the key keeps its normal function.
+- **Tap** the handsfree key (default: `Right ⌘`) to start recording, tap again or press **Escape** to stop and transcribe
+- **Press Escape** while holding push to talk to cancel without transcribing
+- Pick the language you are speaking (or **Auto**) from the "Speaking" chips in the menu-bar popover
 - Choose a post-processing action from the caret bubble, or insert the direct transcript
-- Switch to Push to Talk in Settings if you prefer hold-to-record behavior
+- Both shortcuts can be changed or disabled in Settings; left and right modifier keys are distinct
 - The floating island at the top of the screen shows a live waveform while recording and a spinner while transcribing
 
 ## Run (dev)
@@ -51,7 +52,7 @@ swift run
 ./scripts/build-app.sh
 ```
 
-This produces `dist/SrizonVoice.app`.
+This produces `dist/SrizonVoice.app`. The bundle is signed with the first Apple Development / Developer ID identity found in your keychain (override with `CODESIGN_IDENTITY=...`, or `CODESIGN_IDENTITY=-` for ad-hoc). A stable identity is what lets macOS keep the Accessibility, Input Monitoring, and Microphone grants across rebuilds.
 
 ## Create distributable DMG
 
@@ -72,7 +73,13 @@ From DMG (recommended):
 2. Drag `SrizonVoice.app` to the `Applications` folder
 3. Launch from Applications or Spotlight
 
-From script (also cleans up previous installation first):
+Upgrade in place, keeping settings, history, and permissions:
+
+```bash
+./scripts/upgrade-app.sh
+```
+
+Fresh install from script (wipes settings and permissions first):
 
 ```bash
 ./scripts/install-app.sh
@@ -88,7 +95,9 @@ Removes the app, preferences, caches, permissions, and login item:
 
 ## What is included
 
-- **Handsfree recording** — default `fn` key starts/stops recording, with Push to Talk still available in Settings
+- **Two shortcuts** — push to talk (hold `fn` by default) and handsfree (tap `Right ⌘` by default), both active at once, each configurable or disableable; side-specific modifiers supported
+- **Tap/combination safe** — push to talk ignores quick taps and key combinations so the shortcut key never loses its normal function
+- **Spoken language hint** — quick picker of recent (or common/system) languages in the menu bar, with automatic detection as default
 - **Mic capture** — `16kHz`, `16-bit`, mono PCM via `AVAudioEngine`
 - **Gemini transcription** — `gemini-2.5-flash-lite` by default, with `gemini-3.1-flash-lite` selectable in Settings; both auto-detect the spoken language and return a direct transcript first
 - **Interactive post-processing bubble** — clean up, translate, compact, add emoji, make casual, make formal, make technical, or run a custom prompt before insertion

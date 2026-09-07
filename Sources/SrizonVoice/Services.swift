@@ -144,7 +144,7 @@ final class DictationCoordinator {
         bufferQueue.sync { audioBuffer = Data() }
     }
 
-    func stopRecordingAndTranscribe(targetAppName: String) async -> String? {
+    func stopRecordingAndTranscribe(targetAppName: String, spokenLanguage: LanguageOption? = nil) async -> String? {
         guard isRunning else { return nil }
         audioCapture.stopCapture()
         isRunning = false
@@ -167,7 +167,8 @@ final class DictationCoordinator {
                 apiKey: settings.apiKey,
                 model: settings.geminiModel,
                 audioData: wavData,
-                targetAppName: targetAppName
+                targetAppName: targetAppName,
+                spokenLanguage: spokenLanguage
             )
 
             onTranscribing?(false)
@@ -308,9 +309,10 @@ final class GeminiTranscriptionClient {
         apiKey: String,
         model: GeminiModel,
         audioData: Data,
-        targetAppName: String
+        targetAppName: String,
+        spokenLanguage: LanguageOption? = nil
     ) async throws -> String {
-        let prompt = buildPrompt(targetAppName: targetAppName)
+        let prompt = buildPrompt(targetAppName: targetAppName, spokenLanguage: spokenLanguage)
 
         if audioData.count <= Self.inlineAudioLimitBytes {
             let audioPart: [String: Any] = [
@@ -468,11 +470,17 @@ final class GeminiTranscriptionClient {
         throw DictationError.serverError(body.isEmpty ? "Gemini transcription failed." : body)
     }
 
-    private func buildPrompt(targetAppName: String) -> String {
-        """
+    private func buildPrompt(targetAppName: String, spokenLanguage: LanguageOption?) -> String {
+        let languageInstruction: String
+        if let spokenLanguage {
+            languageInstruction = "The speaker is speaking \(spokenLanguage.plainName) (\(spokenLanguage.code)). Transcribe in \(spokenLanguage.plainName), keeping any words spoken in another language as they were said."
+        } else {
+            languageInstruction = "Detect the spoken language and transcribe the speech in that same language."
+        }
+        return """
         You are transcribing dictation audio for insertion into \(targetAppName).
         Return only the final text. Do not include labels, Markdown, timestamps, explanations, or surrounding quotes.
-        Detect the spoken language and transcribe the speech in that same language.
+        \(languageInstruction)
         Do not translate, rewrite, summarize, or answer questions in the audio.
         Preserve the speaker's words as faithfully as possible while adding natural punctuation only when it is clearly implied.
         """

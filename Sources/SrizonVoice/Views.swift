@@ -6,56 +6,14 @@ import SwiftUI
 struct MenuBarContentView: View {
     @ObservedObject var model: AppModel
 
+    private var pushToTalk: HotKey? { model.settings.pushToTalkHotKey }
+    private var handsfree: HotKey? { model.settings.handsfreeHotKey }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            if model.isDictating {
-                HStack {
-                    Image(systemName: "mic.fill")
-                        .foregroundStyle(VoiceTheme.error)
-                    Text("Recording...")
-                    Spacer()
-                    if model.settings.recordingMode == .pushToTalk {
-                        Text("Release \(model.settings.hotKey.displayString) to stop")
-                            .foregroundStyle(VoiceTheme.secondaryText)
-                            .font(.caption)
-                    } else {
-                        Text("Press \(model.settings.hotKey.displayString) or esc to stop")
-                            .foregroundStyle(VoiceTheme.secondaryText)
-                            .font(.caption)
-                    }
-                }
-            } else if model.isTranscribing {
-                HStack {
-                    ProgressView()
-                        .controlSize(.small)
-                    Text("Transcribing...")
-                        .foregroundStyle(VoiceTheme.secondaryText)
-                }
-            } else if model.isPostProcessing {
-                HStack {
-                    Image(systemName: "wand.and.stars")
-                        .foregroundStyle(VoiceTheme.primary)
-                    Text("Post-processing...")
-                        .foregroundStyle(VoiceTheme.secondaryText)
-                    Spacer()
-                }
-            } else {
-                HStack {
-                    if model.settings.recordingMode == .pushToTalk {
-                        Text("Hold \(model.settings.hotKey.displayString) to dictate")
-                    } else {
-                        Text("Press \(model.settings.hotKey.displayString) to dictate")
-                    }
-                    Spacer()
-                }
-            }
+            statusRow
 
-            Toggle("Handsfree Mode", isOn: Binding(
-                get: { model.settings.recordingMode == .handsfree },
-                set: { _ in model.toggleRecordingMode() }
-            ))
-            .toggleStyle(.switch)
-            .controlSize(.small)
+            languageRow
 
             Toggle("Post-processing", isOn: Binding(
                 get: { model.settings.postProcessingEnabled },
@@ -91,10 +49,157 @@ struct MenuBarContentView: View {
             .buttonStyle(VoiceQuietButtonStyle())
         }
         .padding(12)
-        .frame(width: 280)
+        .frame(width: 300)
         .foregroundStyle(VoiceTheme.onSurface)
         .tint(VoiceTheme.primary)
         .background(VoiceTheme.background)
+    }
+
+    @ViewBuilder
+    private var statusRow: some View {
+        if model.isDictating {
+            HStack {
+                Image(systemName: "mic.fill")
+                    .foregroundStyle(VoiceTheme.error)
+                Text("Recording...")
+                Spacer()
+                Group {
+                    if model.activeRecordingMode == .pushToTalk, let pushToTalk {
+                        Text("Release \(pushToTalk.displayString) to insert")
+                    } else if let handsfree {
+                        Text("Press \(handsfree.displayString) or esc to stop")
+                    } else {
+                        Text("Press esc to stop")
+                    }
+                }
+                .foregroundStyle(VoiceTheme.secondaryText)
+                .font(.caption)
+            }
+        } else if model.isTranscribing {
+            HStack {
+                ProgressView()
+                    .controlSize(.small)
+                Text("Transcribing...")
+                    .foregroundStyle(VoiceTheme.secondaryText)
+            }
+        } else if model.isPostProcessing {
+            HStack {
+                Image(systemName: "wand.and.stars")
+                    .foregroundStyle(VoiceTheme.primary)
+                Text("Post-processing...")
+                    .foregroundStyle(VoiceTheme.secondaryText)
+                Spacer()
+            }
+        } else {
+            VStack(alignment: .leading, spacing: 3) {
+                if let pushToTalk {
+                    shortcutHint(pushToTalk, action: "Hold to dictate")
+                }
+                if let handsfree {
+                    shortcutHint(handsfree, action: "Tap for handsfree")
+                }
+                if pushToTalk == nil && handsfree == nil {
+                    Text("No shortcut set. Add one in Settings.")
+                        .foregroundStyle(VoiceTheme.warning)
+                }
+            }
+        }
+    }
+
+    private func shortcutHint(_ hotKey: HotKey, action: String) -> some View {
+        HStack(spacing: 6) {
+            Text(hotKey.displayString)
+                .font(.caption.weight(.semibold).monospaced())
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .fill(VoiceTheme.surfaceVariant.opacity(0.6))
+                )
+            Text(action)
+                .font(.callout)
+            Spacer()
+        }
+    }
+
+    /// Quick picker for the language the user is speaking. Shows recents (or
+    /// common/system languages when there is no history yet) plus "Auto".
+    private var languageRow: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("Speaking")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(VoiceTheme.secondaryText)
+                Spacer()
+                Menu {
+                    Button("Automatic") { model.setSpokenLanguage(nil) }
+                    Divider()
+                    ForEach(LanguageOption.allCases, id: \.self) { language in
+                        Button(language.displayName) { model.setSpokenLanguage(language) }
+                    }
+                } label: {
+                    Label("More", systemImage: "globe")
+                        .font(.caption)
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+            }
+            HStack(spacing: 6) {
+                LanguageChip(title: "Auto", isSelected: model.settings.spokenLanguage == nil) {
+                    model.setSpokenLanguage(nil)
+                }
+                ForEach(chipLanguages, id: \.self) { language in
+                    LanguageChip(
+                        title: "\(language.flag) \(language.shortCode)",
+                        isSelected: model.settings.spokenLanguage == language,
+                        help: language.plainName
+                    ) {
+                        model.setSpokenLanguage(language)
+                    }
+                }
+            }
+        }
+    }
+
+    /// Quick picks, guaranteeing the currently selected language is visible.
+    private var chipLanguages: [LanguageOption] {
+        var picks = model.quickPickLanguages
+        if let selected = model.settings.spokenLanguage, !picks.contains(selected) {
+            picks.insert(selected, at: 0)
+            picks = Array(picks.prefix(4))
+        }
+        return picks
+    }
+}
+
+// MARK: - LanguageChip
+
+private struct LanguageChip: View {
+    let title: String
+    let isSelected: Bool
+    var help: String? = nil
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .font(.caption.weight(.semibold))
+                .lineLimit(1)
+                .padding(.horizontal, 8)
+                .frame(height: 24)
+                .background(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(isSelected ? VoiceTheme.primaryContainer.opacity(0.62) : VoiceTheme.surfaceVariant.opacity(0.36))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .stroke(isSelected ? VoiceTheme.primary.opacity(0.5) : VoiceTheme.outlineVariant.opacity(0.7), lineWidth: 1)
+                )
+                .foregroundStyle(isSelected ? VoiceTheme.primary : VoiceTheme.onSurface)
+        }
+        .buttonStyle(.plain)
+        .help(help ?? title)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }
 
@@ -175,14 +280,14 @@ struct SettingsView: View {
     @State private var selectedTab: SettingsTab = .general
     @State private var apiKey: String = ""
     @State private var geminiModel: GeminiModel = .defaultValue
-    @State private var hotKey = HotKey.defaultValue
+    @State private var pushToTalkHotKey: HotKey? = HotKey.defaultPushToTalk
+    @State private var handsfreeHotKey: HotKey? = HotKey.defaultHandsfree
     @State private var postProcessingEnabled = true
     @State private var copyToClipboard = false
     @State private var translationLanguage = LanguageOption.english
     @State private var favoriteTranslationLanguage1 = LanguageOption.english
     @State private var favoriteTranslationLanguage2 = LanguageOption.german
     @State private var customPrompts: [CustomPostProcessingPrompt] = []
-    @State private var recordingMode: RecordingMode = .handsfree
     @State private var handsfreeMaxSeconds: Double = Double(UserSettings.defaultHandsfreeSeconds)
 
     private var allPermissionsGranted: Bool {
@@ -203,8 +308,18 @@ struct SettingsView: View {
         allPermissionsGranted ? selectedTab : .general
     }
 
+    private var usesFnKey: Bool {
+        pushToTalkHotKey?.isFnKey == true || handsfreeHotKey?.isFnKey == true
+    }
+
+    /// Both shortcuts would fire on the same key press.
+    private var shortcutsConflict: Bool {
+        guard let pushToTalkHotKey, let handsfreeHotKey else { return false }
+        return pushToTalkHotKey.conflicts(with: handsfreeHotKey)
+    }
+
     private var fnKeyConflict: String? {
-        guard hotKey.isFnKey else { return nil }
+        guard usesFnKey else { return nil }
         let type = UserDefaults(suiteName: "com.apple.HIToolbox")?.integer(forKey: "AppleFnUsageType") ?? 0
         switch type {
         case 0:  return nil
@@ -304,31 +419,31 @@ struct SettingsView: View {
                             model.validateAndSaveAPIKey(
                                 apiKey,
                                 geminiModel: geminiModel,
-                                hotKey: hotKey,
+                                pushToTalkHotKey: pushToTalkHotKey,
+                                handsfreeHotKey: handsfreeHotKey,
                                 postProcessingEnabled: postProcessingEnabled,
                                 copyToClipboard: copyToClipboard,
                                 translationLanguage: translationLanguage,
                                 favoriteTranslationLanguage1: favoriteTranslationLanguage1,
                                 favoriteTranslationLanguage2: favoriteTranslationLanguage2,
                                 customPostProcessingPrompts: customPrompts,
-                                recordingMode: recordingMode,
                                 handsfreeMaxSeconds: Int(handsfreeMaxSeconds)
                             ) { _ in }
                         }
                         .buttonStyle(VoiceQuietButtonStyle())
-                        .disabled(model.isValidatingKey)
+                        .disabled(model.isValidatingKey || shortcutsConflict)
                         Button("Save & Close") {
                             model.validateAndSaveAPIKey(
                                 apiKey,
                                 geminiModel: geminiModel,
-                                hotKey: hotKey,
+                                pushToTalkHotKey: pushToTalkHotKey,
+                                handsfreeHotKey: handsfreeHotKey,
                                 postProcessingEnabled: postProcessingEnabled,
                                 copyToClipboard: copyToClipboard,
                                 translationLanguage: translationLanguage,
                                 favoriteTranslationLanguage1: favoriteTranslationLanguage1,
                                 favoriteTranslationLanguage2: favoriteTranslationLanguage2,
                                 customPostProcessingPrompts: customPrompts,
-                                recordingMode: recordingMode,
                                 handsfreeMaxSeconds: Int(handsfreeMaxSeconds)
                             ) { success in
                                 if success {
@@ -337,7 +452,7 @@ struct SettingsView: View {
                             }
                         }
                         .buttonStyle(VoicePrimaryButtonStyle())
-                        .disabled(model.isValidatingKey)
+                        .disabled(model.isValidatingKey || shortcutsConflict)
                     } else {
                         Button("Grant Permissions (\(permissionsGrantedCount) of 3 given)") {
                             model.requestPermissions()
@@ -357,14 +472,14 @@ struct SettingsView: View {
         .onAppear {
             apiKey = model.settings.apiKey
             geminiModel = model.settings.geminiModel
-            hotKey = model.settings.hotKey
+            pushToTalkHotKey = model.settings.pushToTalkHotKey
+            handsfreeHotKey = model.settings.handsfreeHotKey
             postProcessingEnabled = model.settings.postProcessingEnabled
             copyToClipboard = model.settings.copyToClipboard
             translationLanguage = model.settings.translationLanguage
             favoriteTranslationLanguage1 = model.settings.favoriteTranslationLanguage1
             favoriteTranslationLanguage2 = model.settings.favoriteTranslationLanguage2
             customPrompts = model.settings.customPostProcessingPrompts
-            recordingMode = model.settings.recordingMode
             handsfreeMaxSeconds = Double(UserSettings.clampHandsfreeSeconds(model.settings.handsfreeMaxSeconds))
             model.errorMessage = nil
             model.refreshPermissions()
@@ -380,7 +495,6 @@ struct SettingsView: View {
         if allPermissionsGranted {
             apiKeyCard
             shortcutCard
-            recordingModeCard
         }
     }
 
@@ -408,34 +522,24 @@ struct SettingsView: View {
 
     private var shortcutCard: some View {
         SettingsCard {
-            VStack(alignment: .leading, spacing: 8) {
-                SettingsCardHeader(title: "Shortcut", subtitle: recordingMode == .pushToTalk ? "Hold to dictate, release to insert text" : "Press to start/stop recording")
-                HotKeyRecorderField(hotKey: $hotKey)
-                Text("Suggested hotkeys: fn, ⌃⌥, ⌥⌘")
-                    .font(.caption)
-                    .foregroundStyle(VoiceTheme.secondaryText)
-                if let conflict = fnKeyConflict {
-                    HStack(alignment: .top, spacing: 6) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .foregroundStyle(VoiceTheme.warning)
-                            .font(.caption)
-                        Text("The fn key is assigned to \"\(conflict)\" in System Settings and may not work as a shortcut. Choose a different key, or change the fn key assignment in **System Settings › Keyboard**.")
-                            .font(.caption)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    .padding(.top, 2)
-                }
-            }
-        }
-    }
+            VStack(alignment: .leading, spacing: 12) {
+                SettingsCardHeader(title: "Shortcuts", subtitle: "Both shortcuts are active at the same time. Click a field and press a key combination; press ⌫ to disable one, ⎋ to keep the current value.")
 
-    private var recordingModeCard: some View {
-        SettingsCard {
-            VStack(alignment: .leading, spacing: 8) {
-                SettingsCardHeader(title: "Recording Mode", subtitle: "How the shortcut triggers recording")
-                RecordingModeSelector(selection: $recordingMode)
+                shortcutRow(
+                    title: "Push to talk",
+                    detail: "Hold to record, release to insert. A quick tap or a combination with another key is ignored, so the key keeps working normally.",
+                    hotKey: $pushToTalkHotKey
+                )
 
-                if recordingMode == .handsfree {
+                Divider().overlay(VoiceTheme.outlineVariant.opacity(0.5))
+
+                shortcutRow(
+                    title: "Handsfree",
+                    detail: "Tap to start recording, tap again or press Esc to stop and insert.",
+                    hotKey: $handsfreeHotKey
+                )
+
+                if handsfreeHotKey != nil {
                     HStack(spacing: 12) {
                         Text("Auto-stop")
                             .font(.callout)
@@ -448,12 +552,52 @@ struct SettingsView: View {
                             step: 30
                         )
                     }
-                    Text("Recording stops automatically after this duration, or press the shortcut / Esc to stop early.")
+                    Text("Handsfree recording stops automatically after this duration.")
                         .font(.caption)
                         .foregroundStyle(VoiceTheme.secondaryText)
                 }
+
+                Text("Tips: left and right modifier keys are distinct, so “Right ⌘” alone works as a shortcut. Suggested: fn, Right ⌘, Right ⌥, ⌃⌥, ⌥Space.")
+                    .font(.caption)
+                    .foregroundStyle(VoiceTheme.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if shortcutsConflict {
+                    warningRow("Push to talk and Handsfree use the same shortcut. Change one of them before saving.", isError: true)
+                }
+                if let conflict = fnKeyConflict {
+                    warningRow("The fn key is assigned to \"\(conflict)\" in System Settings. Holding fn for push to talk still works, but a single tap will trigger that system function. To avoid it, set the fn key to \"Do Nothing\" in **System Settings › Keyboard**.")
+                }
             }
         }
+    }
+
+    private func shortcutRow(title: String, detail: String, hotKey: Binding<HotKey?>) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.callout.weight(.semibold))
+                Text(detail)
+                    .font(.caption)
+                    .foregroundStyle(VoiceTheme.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 8)
+            HotKeyRecorderField(hotKey: hotKey)
+                .frame(width: 150)
+        }
+    }
+
+    private func warningRow(_ text: String, isError: Bool = false) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(isError ? VoiceTheme.error : VoiceTheme.warning)
+                .font(.caption)
+            Text(.init(text))
+                .font(.caption)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.top, 2)
     }
 
     private var permissionsCard: some View {
@@ -722,42 +866,6 @@ private struct GeminiModelSelector: View {
     }
 }
 
-// MARK: - RecordingModeSelector
-
-private struct RecordingModeSelector: View {
-    @Binding var selection: RecordingMode
-
-    var body: some View {
-        HStack(spacing: 8) {
-            ForEach(RecordingMode.allCases, id: \.self) { mode in
-                Button {
-                    selection = mode
-                } label: {
-                    HStack(spacing: 7) {
-                        Image(systemName: selection == mode ? "record.circle.fill" : "circle")
-                            .foregroundStyle(selection == mode ? VoiceTheme.primary : VoiceTheme.secondaryText)
-                        Text(mode.displayName)
-                            .font(.callout.weight(.medium))
-                        Spacer(minLength: 0)
-                    }
-                    .padding(.horizontal, 10)
-                    .frame(maxWidth: .infinity, minHeight: 34)
-                    .background(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(selection == mode ? VoiceTheme.primaryContainer.opacity(0.58) : VoiceTheme.surfaceVariant.opacity(0.36))
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .stroke(selection == mode ? VoiceTheme.primary.opacity(0.46) : VoiceTheme.outlineVariant.opacity(0.70), lineWidth: 1)
-                    )
-                }
-                .buttonStyle(.plain)
-                .accessibilityAddTraits(selection == mode ? .isSelected : [])
-            }
-        }
-    }
-}
-
 // MARK: - PermissionRow
 
 struct PermissionRow: View {
@@ -775,102 +883,156 @@ struct PermissionRow: View {
 
 // MARK: - HotKeyRecorderField
 
+/// Click-to-record shortcut field. Records:
+///  - fn/Globe
+///  - modifier-only chords, side-aware (e.g. Right ⌘, Left ⌃ + Left ⌥) — recorded
+///    when the modifiers are released without any other key having been pressed
+///  - a regular key with modifiers (⌥Space, either side) or a function key alone (F5)
+/// Delete/Backspace clears the shortcut (disabled); Escape keeps the previous value.
 struct HotKeyRecorderField: NSViewRepresentable {
-    @Binding var hotKey: HotKey
+    @Binding var hotKey: HotKey?
 
     func makeNSView(context: Context) -> NSButton {
         let button = NSButton(
-            title: hotKey.displayString,
+            title: Self.title(for: hotKey),
             target: context.coordinator,
             action: #selector(Coordinator.startRecording)
         )
         button.bezelStyle = .rounded
+        button.setContentHuggingPriority(.defaultLow, for: .horizontal)
         return button
     }
 
     func updateNSView(_ nsView: NSButton, context: Context) {
-        nsView.title = hotKey.displayString
+        context.coordinator.hotKey = $hotKey
+        if !context.coordinator.isRecording {
+            nsView.title = Self.title(for: hotKey)
+        }
     }
 
     func makeCoordinator() -> Coordinator {
         Coordinator(hotKey: $hotKey)
     }
 
+    static func title(for hotKey: HotKey?) -> String {
+        hotKey?.displayString ?? "Not set"
+    }
+
     final class Coordinator: NSObject {
-        @Binding private var hotKey: HotKey
+        var hotKey: Binding<HotKey?>
         private var monitor: Any?
         private weak var button: NSButton?
-        /// Tracks the peak set of modifiers held during this recording session.
-        private var peakModifiers: NSEvent.ModifierFlags = []
+        private(set) var isRecording = false
+        /// Modifier keys currently held, tracked by key code so sides are distinct.
+        private var heldModifiers: Set<ModifierKey> = []
+        /// Largest chord held during this session (what a modifier-only release records).
+        private var peakModifiers: Set<ModifierKey> = []
 
-        init(hotKey: Binding<HotKey>) {
-            _hotKey = hotKey
+        init(hotKey: Binding<HotKey?>) {
+            self.hotKey = hotKey
         }
 
         @objc func startRecording(_ sender: NSButton) {
+            if isRecording { return }
             button = sender
-            sender.title = "Press new shortcut..."
+            isRecording = true
+            sender.title = "Press shortcut…"
+            heldModifiers = []
             peakModifiers = []
             monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { [weak self] event in
                 guard let self else { return event }
-
-                if event.type == .flagsChanged {
-                    // Detect the fn/Globe key
-                    if event.keyCode == 63, event.modifierFlags.contains(.function) {
-                        self.hotKey = HotKey(keyCode: 63, modifiers: 0, isFnKey: true)
-                        self.finish()
-                        return nil
-                    }
-
-                    let currentMods = event.modifierFlags.intersection([.command, .shift, .option, .control])
-                    let currentCount = self.modifierCount(currentMods)
-                    let peakCount = self.modifierCount(self.peakModifiers)
-
-                    if currentCount >= peakCount {
-                        // Modifiers being added or same
-                        self.peakModifiers = currentMods
-                    } else if peakCount >= 2 {
-                        // A modifier was released and we had 2+ — record as modifier-only
-                        self.hotKey = HotKey(
-                            keyCode: 0,
-                            modifiers: KeyCodeMap.carbonModifiers(from: self.peakModifiers),
-                            isModifierOnly: true
-                        )
-                        self.finish()
-                        return nil
-                    } else {
-                        self.peakModifiers = currentMods
-                    }
-                    return event
-                }
-
-                // Regular key + modifier combination
-                guard event.type == .keyDown else { return event }
-                let modifiers = event.modifierFlags.intersection([.command, .shift, .option, .control])
-                guard !modifiers.isEmpty else { return nil }
-                self.hotKey = HotKey(
-                    keyCode: UInt32(event.keyCode),
-                    modifiers: KeyCodeMap.carbonModifiers(from: modifiers)
-                )
-                self.finish()
-                return nil
+                return self.handle(event) ? nil : event
             }
         }
 
+        /// Returns true when the event was consumed.
+        private func handle(_ event: NSEvent) -> Bool {
+            if event.type == .flagsChanged {
+                // fn/Globe key
+                if event.keyCode == 63 {
+                    if event.modifierFlags.contains(.function) {
+                        commit(HotKey.fnKey)
+                    }
+                    return true
+                }
+
+                guard let key = ModifierKey(rawValue: UInt32(event.keyCode)) else { return true }
+                let familyHeld = event.modifierFlags.contains(Self.nsFlag(for: key))
+                // The event's key code tells us which physical key changed; the
+                // generic flag tells us whether that family is now held at all.
+                if familyHeld, !heldModifiers.contains(key) {
+                    heldModifiers.insert(key)
+                } else if heldModifiers.contains(key) {
+                    heldModifiers.remove(key)
+                } else if !familyHeld {
+                    heldModifiers = heldModifiers.filter { $0.cgFlag != key.cgFlag }
+                }
+
+                if heldModifiers.count >= peakModifiers.count {
+                    peakModifiers = heldModifiers
+                } else if heldModifiers.isEmpty || heldModifiers.count < peakModifiers.count {
+                    // Released after building a chord without any regular key → modifier-only
+                    commit(HotKey(
+                        keyCode: 0,
+                        modifiers: peakModifiers.reduce(0) { $0 | $1.carbonMask },
+                        isModifierOnly: true,
+                        modifierKeys: Array(peakModifiers)
+                    ))
+                }
+                return true
+            }
+
+            guard event.type == .keyDown else { return false }
+
+            switch event.keyCode {
+            case 53: // Escape — keep current value
+                finish()
+                return true
+            case 51, 117: // Delete / Forward delete — disable
+                commit(nil)
+                return true
+            default:
+                break
+            }
+
+            let generic = KeyCodeMap.carbonModifiers(from: event.modifierFlags)
+            let isFunctionKey = Self.standaloneKeyCodes.contains(UInt32(event.keyCode))
+            guard generic != 0 || isFunctionKey else {
+                // A bare letter/number would hijack typing — ignore it.
+                return true
+            }
+            // Key+modifier combos match either side (like most macOS shortcuts);
+            // only modifier-only shortcuts are side-specific.
+            commit(HotKey(keyCode: UInt32(event.keyCode), modifiers: generic))
+            return true
+        }
+
+        private func commit(_ value: HotKey?) {
+            hotKey.wrappedValue = value
+            finish()
+        }
+
         private func finish() {
-            button?.title = hotKey.displayString
-            if let monitor = monitor { NSEvent.removeMonitor(monitor) }
+            isRecording = false
+            button?.title = HotKeyRecorderField.title(for: hotKey.wrappedValue)
+            if let monitor { NSEvent.removeMonitor(monitor) }
             monitor = nil
+            heldModifiers = []
             peakModifiers = []
         }
 
-        private func modifierCount(_ flags: NSEvent.ModifierFlags) -> Int {
-            var count = 0
-            if flags.contains(.command) { count += 1 }
-            if flags.contains(.shift) { count += 1 }
-            if flags.contains(.option) { count += 1 }
-            if flags.contains(.control) { count += 1 }
-            return count
+        /// Keys that are safe as a shortcut without any modifier (function keys).
+        private static let standaloneKeyCodes: Set<UInt32> = [
+            96, 97, 98, 99, 100, 101, 103, 105, 107, 109, 111, 113, 118, 120, 122,
+        ]
+
+        private static func nsFlag(for key: ModifierKey) -> NSEvent.ModifierFlags {
+            switch key.cgFlag {
+            case .maskCommand: return .command
+            case .maskShift:   return .shift
+            case .maskAlternate: return .option
+            default:           return .control
+            }
         }
     }
 }

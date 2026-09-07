@@ -5,6 +5,27 @@ All notable changes to SrizonVoice will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.5.0] - 2026-09-07
+
+### Added
+- Two independent shortcuts instead of one shortcut plus a mode toggle: **Push to talk** (default: hold `fn`) and **Handsfree** (default: tap `Right ⌘`). Both are active at the same time and either can be disabled.
+- Left and right modifier keys are now distinct, so a single side-specific modifier (e.g. `Right ⌘` or `Right ⌥`) can be a shortcut on its own.
+- Function keys (F1–F15) can be used as shortcuts without a modifier.
+- A "Speaking" quick picker in the menu-bar popover that hints Gemini which language you are dictating in, with an **Auto** option. It shows your recently used languages, or the system languages plus English, German, French, and Spanish when there is no history yet. A "More" menu lists every language.
+- Recently used languages (spoken hint and translation targets) are remembered and also surface as quick translation buttons in the post-processing bubble.
+- Signing: the build script signs with a Developer ID or Apple Development certificate when one is present (hardened runtime + entitlements), so macOS keeps Microphone, Accessibility, and Input Monitoring grants across rebuilds. New `scripts/upgrade-app.sh` upgrades in place without touching settings or permissions, and `scripts/notarize.sh` notarizes and staples the DMG.
+
+### Changed
+- The recording island is now a small black pill just above the Dock, with six white dots that grow into bars with your voice and pulse in sequence while transcribing, instead of a wide bar at the top of the screen.
+- Push to talk no longer interferes with the shortcut key's normal function: a quick tap (under 200 ms) or a combination with another key (e.g. `fn`+`F1`, `Right ⌘`+`C`) is ignored, and the recording sound and island only appear once the key is clearly being held.
+- Handsfree shortcuts based on modifiers (`fn`, `Right ⌘`, `⌃⌥`) toggle on release and only when no other key was pressed in between, so holding the modifier for a normal combination never starts recording.
+- Key + modifier shortcuts (e.g. `⌥Space`) are now swallowed while held so the frontmost app does not also receive them, and they require an exact modifier match.
+- The "Handsfree Mode" toggle was removed from the popover and the "Recording Mode" card from Settings; both behaviours are always available through their own shortcut.
+- Existing installs keep their configured shortcut: it becomes the push-to-talk or handsfree shortcut depending on the previous mode, and the other one gets the new default.
+
+### Fixed
+- Shortcut recording could get stuck or produce a wrong chord when modifiers were pressed in an unusual order; the recorder now tracks each physical modifier key. `⌫` clears a shortcut and `⎋` cancels recording.
+
 ## [3.4.0] - 2026-06-29
 
 ### Added
@@ -135,6 +156,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CGEvent tap for global Esc key handling
 - SMAppService for launch-at-login registration
 
+[3.5.0]: https://github.com/AfzalH/voice/releases/tag/v3.5.0
 [3.4.0]: https://github.com/AfzalH/voice/releases/tag/v3.4.0
 [3.3.0]: https://github.com/AfzalH/voice/releases/tag/v3.3.0
 [3.2.0]: https://github.com/AfzalH/voice/releases/tag/v3.2.0

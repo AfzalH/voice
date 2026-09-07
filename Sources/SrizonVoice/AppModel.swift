@@ -11,6 +11,10 @@ final class AppModel: ObservableObject {
     @Published var errorMessage: String?
     @Published var isValidatingKey = false
     @Published private(set) var dictationHistory: [DictationHistoryEntry] = []
+    /// Languages most recently chosen (spoken hint or translation target), newest first.
+    @Published private(set) var recentLanguages: [LanguageOption] = []
+    /// How the in-progress recording was started; `nil` when idle.
+    @Published private(set) var activeRecordingMode: RecordingMode?
 
     let settings = UserSettings()
     private let insertionService = TextInsertionService()
@@ -28,6 +32,10 @@ final class AppModel: ObservableObject {
     private var errorDismissTask: Task<Void, Never>?
     private var permissionPollTask: Task<Void, Never>?
     private var handsfreeAutoStopTask: Task<Void, Never>?
+    /// Delays the recording island + sound for push-to-talk until the press has
+    /// outlived the tap threshold, so fn taps and combos stay silent.
+    private var pushToTalkFeedbackTask: Task<Void, Never>?
+    private var recordingFeedbackShown = false
     private var pendingInsertionTarget: TextInsertionTarget?
     /// True while `startDictation` is in its async startup (before recording begins).
     private var isStartingDictation = false
@@ -38,6 +46,7 @@ final class AppModel: ObservableObject {
     init() {
         settings.load()
         dictationHistory = DictationHistoryStore.load()
+        recentLanguages = RecentLanguagesStore.load()
         ensureLaunchAtLogin()
         refreshPermissions()
         configureCallbacks()
@@ -61,7 +70,10 @@ final class AppModel: ObservableObject {
             return
         }
         do {
-            try hotKeyMonitor.register(hotKey: settings.hotKey)
+            try hotKeyMonitor.register(
+                pushToTalk: settings.pushToTalkHotKey,
+                handsfree: settings.handsfreeHotKey
+            )
         } catch {
             showError("Failed to register global shortcut. Check Input Monitoring permission in System Settings > Privacy & Security.")
         }
@@ -105,10 +117,25 @@ final class AppModel: ObservableObject {
         saveSettings()
     }
 
-    func toggleRecordingMode() {
+    // MARK: - Languages
+
+    /// Languages offered as quick picks in the menu popover.
+    var quickPickLanguages: [LanguageOption] {
+        RecentLanguagesStore.quickPicks(from: recentLanguages, count: 4)
+    }
+
+    /// Sets the language hint sent with each transcription. `nil` = auto-detect.
+    func setSpokenLanguage(_ language: LanguageOption?) {
         objectWillChange.send()
-        settings.recordingMode = settings.recordingMode == .pushToTalk ? .handsfree : .pushToTalk
+        settings.spokenLanguage = language
+        if let language { noteLanguageUsed(language) }
         saveSettings()
+    }
+
+    /// Records a language as recently used so it surfaces in quick pickers.
+    func noteLanguageUsed(_ language: LanguageOption) {
+        recentLanguages = RecentLanguagesStore.bump(language, in: recentLanguages)
+        RecentLanguagesStore.save(recentLanguages)
     }
 
     func togglePostProcessing() {
@@ -192,14 +219,14 @@ final class AppModel: ObservableObject {
     func validateAndSaveAPIKey(
         _ key: String,
         geminiModel: GeminiModel = .defaultValue,
-        hotKey: HotKey,
+        pushToTalkHotKey: HotKey?,
+        handsfreeHotKey: HotKey?,
         postProcessingEnabled: Bool = true,
         copyToClipboard: Bool = false,
         translationLanguage: LanguageOption = .english,
         favoriteTranslationLanguage1: LanguageOption = .english,
         favoriteTranslationLanguage2: LanguageOption = .german,
         customPostProcessingPrompts: [CustomPostProcessingPrompt] = [],
-        recordingMode: RecordingMode = .handsfree,
         handsfreeMaxSeconds: Int = UserSettings.defaultHandsfreeSeconds,
         completion: @escaping (Bool) -> Void
     ) {
@@ -223,14 +250,14 @@ final class AppModel: ObservableObject {
             isValidatingKey = false
             settings.apiKey = trimmed
             settings.geminiModel = geminiModel
-            settings.hotKey = hotKey
+            settings.pushToTalkHotKey = pushToTalkHotKey
+            settings.handsfreeHotKey = handsfreeHotKey
             settings.postProcessingEnabled = postProcessingEnabled
             settings.copyToClipboard = copyToClipboard
             settings.translationLanguage = translationLanguage
             settings.favoriteTranslationLanguage1 = favoriteTranslationLanguage1
             settings.favoriteTranslationLanguage2 = favoriteTranslationLanguage2
             settings.customPostProcessingPrompts = UserSettings.normalizedCustomPostProcessingPrompts(customPostProcessingPrompts)
-            settings.recordingMode = recordingMode
             settings.handsfreeMaxSeconds = UserSettings.clampHandsfreeSeconds(handsfreeMaxSeconds)
             saveSettings()
             errorMessage = nil
@@ -240,7 +267,7 @@ final class AppModel: ObservableObject {
 
     // MARK: - Private
 
-    private func startDictation() {
+    private func startDictation(mode: RecordingMode) {
         guard !isStartingDictation else { return }
         if settings.apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             showError("Add your Gemini API key in Settings.")
@@ -275,14 +302,52 @@ final class AppModel: ObservableObject {
             do {
                 try dictationCoordinator.startRecording()
                 isDictating = true
-                recordingIslandController.show()
-                NSSound(named: "Tink")?.play()
+                activeRecordingMode = mode
+                recordingFeedbackShown = false
+                if mode == .pushToTalk {
+                    // Stay silent until the press is clearly a hold, not a tap.
+                    pushToTalkFeedbackTask?.cancel()
+                    pushToTalkFeedbackTask = Task { [weak self] in
+                        try? await Task.sleep(nanoseconds: UInt64(GlobalHotKeyMonitor.tapThreshold * 1_000_000_000))
+                        guard let self, !Task.isCancelled, self.isDictating else { return }
+                        self.showRecordingFeedback()
+                    }
+                } else {
+                    showRecordingFeedback()
+                }
             } catch {
                 isDictating = false
+                activeRecordingMode = nil
                 showError(error.localizedDescription)
                 recordingIslandController.hide()
             }
         }
+    }
+
+    private func showRecordingFeedback() {
+        guard !recordingFeedbackShown else { return }
+        recordingFeedbackShown = true
+        recordingIslandController.show()
+        NSSound(named: "Tink")?.play()
+    }
+
+    /// Discards the current recording without transcribing. Silent when no
+    /// feedback was shown yet (tap or combination on the push-to-talk key).
+    private func cancelActiveRecording() {
+        pushToTalkFeedbackTask?.cancel()
+        pushToTalkFeedbackTask = nil
+        cancelHandsfreeAutoStop()
+        guard isDictating else {
+            if isStartingDictation { stopRequestedDuringStart = true }
+            return
+        }
+        dictationCoordinator.cancelRecording()
+        isDictating = false
+        activeRecordingMode = nil
+        pendingInsertionTarget = nil
+        recordingIslandController.hide()
+        if recordingFeedbackShown { NSSound(named: "Pop")?.play() }
+        recordingFeedbackShown = false
     }
 
     private func stopDictation() {
@@ -293,7 +358,11 @@ final class AppModel: ObservableObject {
             return
         }
         cancelHandsfreeAutoStop()
+        pushToTalkFeedbackTask?.cancel()
+        pushToTalkFeedbackTask = nil
+        recordingFeedbackShown = false
         isDictating = false
+        activeRecordingMode = nil
         isTranscribing = true
         recordingIslandController.showTranscribing()
         NSSound(named: "Pop")?.play()
@@ -301,7 +370,10 @@ final class AppModel: ObservableObject {
         Task {
             let target = pendingInsertionTarget ?? insertionService.captureCurrentTarget()
             let targetAppName = target?.appName ?? "Unknown App"
-            let transcript = await dictationCoordinator.stopRecordingAndTranscribe(targetAppName: targetAppName)
+            let transcript = await dictationCoordinator.stopRecordingAndTranscribe(
+                targetAppName: targetAppName,
+                spokenLanguage: settings.spokenLanguage
+            )
             isTranscribing = false
             recordingIslandController.hide()
             guard let transcript else {
@@ -346,39 +418,41 @@ final class AppModel: ObservableObject {
             Task { @MainActor in
                 self?.showError(message)
                 self?.isDictating = false
+                self?.activeRecordingMode = nil
                 self?.isTranscribing = false
                 self?.isPostProcessing = false
                 self?.recordingIslandController.hide()
             }
         }
 
-        hotKeyMonitor.onKeyDown = { [weak self] in
+        hotKeyMonitor.onPushToTalkBegan = { [weak self] in
             Task { @MainActor in
                 guard let self else { return }
-                guard !self.isPostProcessing else { return }
-                if self.settings.recordingMode == .pushToTalk {
-                    // Push-to-talk: press starts
-                    guard !self.isDictating, !self.isTranscribing else { return }
-                    self.startDictation()
+                guard !self.isPostProcessing, !self.isDictating, !self.isTranscribing else { return }
+                self.startDictation(mode: .pushToTalk)
+            }
+        }
+        hotKeyMonitor.onPushToTalkEnded = { [weak self] cancelled in
+            Task { @MainActor in
+                guard let self, self.activeRecordingMode == .pushToTalk || self.isStartingDictation else { return }
+                if cancelled {
+                    self.cancelActiveRecording()
                 } else {
-                    // Handsfree: toggle on/off
-                    if self.isDictating {
-                        self.stopDictation()
-                    } else if !self.isTranscribing {
-                        self.startDictation()
-                        self.startHandsfreeAutoStop()
-                    }
+                    self.stopDictation()
                 }
             }
         }
-        hotKeyMonitor.onKeyUp = { [weak self] in
+        hotKeyMonitor.onHandsfreeToggled = { [weak self] in
             Task { @MainActor in
                 guard let self else { return }
                 guard !self.isPostProcessing else { return }
-                if self.settings.recordingMode == .pushToTalk {
+                if self.isDictating {
+                    // Also lets the handsfree key finish a push-to-talk hold.
                     self.stopDictation()
+                } else if !self.isTranscribing {
+                    self.startDictation(mode: .handsfree)
+                    self.startHandsfreeAutoStop()
                 }
-                // Handsfree: ignore key up
             }
         }
     }
@@ -387,16 +461,12 @@ final class AppModel: ObservableObject {
         escapeKeyMonitor.onEscapePressed = { [weak self] in
             Task { @MainActor in
                 guard let self, self.isDictating else { return }
-                if self.settings.recordingMode == .handsfree {
+                if self.activeRecordingMode == .handsfree {
                     // In handsfree mode, Escape stops and transcribes
-                    self.cancelHandsfreeAutoStop()
                     self.stopDictation()
                 } else {
                     // In push-to-talk mode, Escape cancels without transcribing
-                    self.dictationCoordinator.cancelRecording()
-                    self.isDictating = false
-                    self.recordingIslandController.hide()
-                    NSSound(named: "Pop")?.play()
+                    self.cancelActiveRecording()
                 }
             }
         }
@@ -429,10 +499,14 @@ final class AppModel: ObservableObject {
         let targetAppName = target?.appName ?? "the target app"
         let apiKey = settings.apiKey
         let initialLanguage = settings.translationLanguage
-        let favoriteLanguages = [
-            settings.favoriteTranslationLanguage1,
-            settings.favoriteTranslationLanguage2,
-        ]
+        // Quick translation buttons: recently used languages first, then favorites.
+        var favoriteLanguages = recentLanguages
+        for favorite in [settings.favoriteTranslationLanguage1, settings.favoriteTranslationLanguage2]
+            where !favoriteLanguages.contains(favorite)
+        {
+            favoriteLanguages.append(favorite)
+        }
+        favoriteLanguages = Array(favoriteLanguages.prefix(4))
         let customPrompts = settings.customPostProcessingPrompts
         let selectedModel = settings.geminiModel
         let processor = postProcessingClient
@@ -443,8 +517,11 @@ final class AppModel: ObservableObject {
             translationLanguage: initialLanguage,
             favoriteTranslationLanguages: favoriteLanguages,
             customPrompts: customPrompts,
-            processAction: { sourceText, action in
-                try await processor.process(
+            processAction: { [weak self] sourceText, action in
+                if case .translate(let language) = action {
+                    await MainActor.run { self?.noteLanguageUsed(language) }
+                }
+                return try await processor.process(
                     apiKey: apiKey,
                     model: selectedModel,
                     transcript: sourceText,
