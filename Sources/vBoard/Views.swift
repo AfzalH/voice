@@ -391,7 +391,24 @@ struct SettingsView: View {
                     .overlay(VoiceTheme.outlineVariant.opacity(0.8))
 
                 // Save footer
-                HStack {
+                HStack(spacing: 10) {
+                    StoreLinkButton(
+                        title: "iPhone",
+                        subtitle: "App Store",
+                        url: "https://apps.apple.com/us/app/vboard/id6797043658"
+                    ) {
+                        Image(systemName: "apple.logo")
+                            .font(.system(size: 17, weight: .medium))
+                            .foregroundStyle(.white)
+                    }
+                    StoreLinkButton(
+                        title: "Android",
+                        subtitle: "Google Play",
+                        url: "https://play.google.com/store/apps/details?id=com.srizon.vboard"
+                    ) {
+                        GooglePlayGlyph()
+                            .frame(width: 16, height: 17)
+                    }
                     if !allPermissionsGranted {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .foregroundStyle(VoiceTheme.warning)
@@ -464,23 +481,6 @@ struct SettingsView: View {
                 .padding(.vertical, 12)
                 .background(VoiceTheme.surface)
 
-                // Cross-sell footer
-                HStack(spacing: 6) {
-                    Image(systemName: "iphone.gen3")
-                        .foregroundStyle(VoiceTheme.secondaryText)
-                    Text("Need the same on your phone?")
-                        .foregroundStyle(VoiceTheme.secondaryText)
-                    Link("vBoard for iPhone", destination: URL(string: "https://apps.apple.com/us/app/vboard/id6797043658")!)
-                    Text("·").foregroundStyle(VoiceTheme.secondaryText)
-                    Link("vBoard for Android", destination: URL(string: "https://play.google.com/store/apps/details?id=com.srizon.vboard")!)
-                    Spacer()
-                    Link("srizon.com/vboard", destination: URL(string: "https://www.srizon.com/vboard")!)
-                        .foregroundStyle(VoiceTheme.secondaryText)
-                }
-                .font(.caption)
-                .padding(.horizontal, 24)
-                .padding(.vertical, 8)
-                .background(VoiceTheme.background)
             }
         }
         .frame(width: 780, height: 610)
@@ -1058,6 +1058,70 @@ struct HotKeyRecorderField: NSViewRepresentable {
             case .maskShift:   return .shift
             case .maskAlternate: return .option
             default:           return .control
+            }
+        }
+    }
+}
+
+// MARK: - StoreLinkButton
+
+/// Compact "get vBoard on your phone" button for the Settings footer.
+private struct StoreLinkButton<Icon: View>: View {
+    let title: String
+    let subtitle: String
+    let url: String
+    @ViewBuilder let icon: () -> Icon
+
+    var body: some View {
+        Link(destination: URL(string: url)!) {
+            HStack(spacing: 8) {
+                icon()
+                    .frame(width: 18, height: 18)
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(subtitle.uppercased())
+                        .font(.system(size: 7.5, weight: .semibold))
+                        .tracking(0.4)
+                        .opacity(0.75)
+                    Text(title)
+                        .font(.system(size: 12, weight: .semibold))
+                }
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 10)
+            .frame(height: 32)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color(nsColor: NSColor(hex: 0x2A211A)))
+            )
+        }
+        .buttonStyle(.plain)
+        .help("Get vBoard for \(title)")
+    }
+}
+
+/// The four-colour Google Play triangle, drawn in SwiftUI.
+private struct GooglePlayGlyph: View {
+    var body: some View {
+        GeometryReader { geo in
+            let w = geo.size.width, h = geo.size.height
+            let mid = CGPoint(x: w * 0.62, y: h / 2)
+            ZStack {
+                // left (cyan)
+                Path { p in
+                    p.move(to: CGPoint(x: 0, y: 0)); p.addLine(to: mid); p.addLine(to: CGPoint(x: 0, y: h)); p.closeSubpath()
+                }.fill(Color(red: 0, green: 0.82, blue: 1))
+                // top (red)
+                Path { p in
+                    p.move(to: CGPoint(x: 0, y: 0)); p.addLine(to: CGPoint(x: w * 0.78, y: h * 0.36)); p.addLine(to: mid); p.closeSubpath()
+                }.fill(Color(red: 1, green: 0.23, blue: 0.27))
+                // bottom (green)
+                Path { p in
+                    p.move(to: CGPoint(x: 0, y: h)); p.addLine(to: mid); p.addLine(to: CGPoint(x: w * 0.78, y: h * 0.64)); p.closeSubpath()
+                }.fill(Color(red: 0, green: 0.88, blue: 0.37))
+                // right (yellow)
+                Path { p in
+                    p.move(to: CGPoint(x: w * 0.78, y: h * 0.36)); p.addLine(to: CGPoint(x: w, y: h / 2)); p.addLine(to: CGPoint(x: w * 0.78, y: h * 0.64)); p.addLine(to: mid); p.closeSubpath()
+                }.fill(Color(red: 1, green: 0.81, blue: 0))
             }
         }
     }

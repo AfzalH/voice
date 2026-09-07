@@ -10,7 +10,7 @@ vBoard is free. You only pay Google Gemini API usage through your own API key, w
 
 ## Download
 
-Download the latest installer: [vBoard-3.6.0.dmg](https://github.com/AfzalH/voice/releases/download/v3.6.0/vBoard-3.6.0.dmg).
+Download the latest installer: [vBoard-3.6.1.dmg](https://github.com/AfzalH/voice/releases/download/v3.6.1/vBoard-3.6.1.dmg).
 
 Checksums and older builds are available on [GitHub Releases](https://github.com/AfzalH/voice/releases/latest).
 
@@ -58,14 +58,14 @@ This produces `dist/vBoard.app`. The bundle is signed with the first Apple Devel
 
 This produces:
 
-- `dist/vBoard-3.6.0.dmg` — Installer disk image
-- `dist/vBoard-3.6.0.sha256` — Checksum for verification
+- `dist/vBoard-3.6.1.dmg` — Installer disk image
+- `dist/vBoard-3.6.1.sha256` — Checksum for verification
 
 ## Install
 
 From DMG (recommended):
 
-1. Open `vBoard-3.6.0.dmg`
+1. Open `vBoard-3.6.1.dmg`
 2. Drag `vBoard.app` to the `Applications` folder
 3. Launch from Applications or Spotlight
 
