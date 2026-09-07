@@ -35,6 +35,10 @@ xcrun notarytool submit "$DMG_PATH" --keychain-profile "$PROFILE" --wait
 echo "Stapling ticket..."
 xcrun stapler staple "$DMG_PATH"
 
-echo "Verifying Gatekeeper acceptance..."
-spctl -a -t open --context context:primary-signature -v "$DMG_PATH"
+echo "Verifying Gatekeeper acceptance of the app inside the DMG..."
+MOUNT="$(hdiutil attach -nobrowse -readonly "$DMG_PATH" | awk -F'\t' '/\/Volumes\//{print $NF}')"
+spctl -a -t exec -vv "$MOUNT"/vBoard.app
+hdiutil detach "$MOUNT" -quiet
+echo "Refreshing checksum..."
+(cd "$(dirname "$DMG_PATH")" && shasum -a 256 "$(basename "$DMG_PATH")" > "$(basename "${DMG_PATH%.dmg}").sha256")
 echo "Done: $DMG_PATH is notarized and stapled."
