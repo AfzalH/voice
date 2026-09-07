@@ -282,7 +282,7 @@ struct SettingsView: View {
     @State private var geminiModel: GeminiModel = .defaultValue
     @State private var pushToTalkHotKey: HotKey? = HotKey.defaultPushToTalk
     @State private var handsfreeHotKey: HotKey? = HotKey.defaultHandsfree
-    @State private var postProcessingEnabled = true
+    @State private var postProcessingEnabled = false
     @State private var copyToClipboard = false
     @State private var translationLanguage = LanguageOption.english
     @State private var favoriteTranslationLanguage1 = LanguageOption.english

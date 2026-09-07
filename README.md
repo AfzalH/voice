@@ -10,7 +10,7 @@ vBoard is free. You only pay Google Gemini API usage through your own API key, w
 
 ## Download
 
-Download the latest installer: [vBoard-3.5.0.dmg](https://github.com/AfzalH/voice/releases/download/v3.5.0/vBoard-3.5.0.dmg).
+Download the latest installer: [vBoard-3.6.0.dmg](https://github.com/AfzalH/voice/releases/download/v3.6.0/vBoard-3.6.0.dmg).
 
 Checksums and older builds are available on [GitHub Releases](https://github.com/AfzalH/voice/releases/latest).
 
@@ -58,14 +58,14 @@ This produces `dist/vBoard.app`. The bundle is signed with the first Apple Devel
 
 This produces:
 
-- `dist/vBoard-3.5.0.dmg` — Installer disk image
-- `dist/vBoard-3.5.0.sha256` — Checksum for verification
+- `dist/vBoard-3.6.0.dmg` — Installer disk image
+- `dist/vBoard-3.6.0.sha256` — Checksum for verification
 
 ## Install
 
 From DMG (recommended):
 
-1. Open `vBoard-3.5.0.dmg`
+1. Open `vBoard-3.6.0.dmg`
 2. Drag `vBoard.app` to the `Applications` folder
 3. Launch from Applications or Spotlight
 
@@ -95,7 +95,7 @@ Removes the app, preferences, caches, permissions, and login item:
 - **Tap/combination safe** — push to talk ignores quick taps and key combinations so the shortcut key never loses its normal function
 - **Spoken language hint** — quick picker of recent (or common/system) languages in the menu bar, with automatic detection as default
 - **Mic capture** — `16kHz`, `16-bit`, mono PCM via `AVAudioEngine`
-- **Gemini transcription** — `gemini-2.5-flash-lite` by default, with `gemini-3.1-flash-lite` selectable in Settings; both auto-detect the spoken language and return a direct transcript first
+- **Gemini transcription** — `gemini-3.1-flash-lite` by default, with `gemini-3.5-flash` selectable in Settings; both auto-detect the spoken language and return a direct transcript first
 - **Interactive post-processing bubble** — clean up, translate, compact, add emoji, make casual, make formal, make technical, or run a custom prompt before insertion
 - **Review loop** — chain multiple post-processing actions, undo the last rewrite, and only auto-insert when the checkbox is enabled
 - **Copy and Insert** — final text is copied to the clipboard and inserted, so manual paste is available if insertion fails

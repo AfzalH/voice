@@ -241,7 +241,7 @@ final class AppModel: ObservableObject {
         geminiModel: GeminiModel = .defaultValue,
         pushToTalkHotKey: HotKey?,
         handsfreeHotKey: HotKey?,
-        postProcessingEnabled: Bool = true,
+        postProcessingEnabled: Bool = false,
         copyToClipboard: Bool = false,
         translationLanguage: LanguageOption = .english,
         favoriteTranslationLanguage1: LanguageOption = .english,

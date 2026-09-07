@@ -577,15 +577,13 @@ enum RecordingMode: String, CaseIterable, Codable {
 enum GeminiModel: String, CaseIterable, Codable {
     case gemini35Flash = "gemini-3.5-flash"
     case gemini31FlashLite = "gemini-3.1-flash-lite"
-    case gemini25FlashLite = "gemini-2.5-flash-lite"
 
-    static let defaultValue: GeminiModel = .gemini25FlashLite
+    static let defaultValue: GeminiModel = .gemini31FlashLite
 
     var displayName: String {
         switch self {
         case .gemini35Flash: return "Gemini 3.5"
         case .gemini31FlashLite: return "Gemini 3.1"
-        case .gemini25FlashLite: return "Gemini 2.5"
         }
     }
 
@@ -756,7 +754,7 @@ final class UserSettings {
     var outputMode: TranscriptionOutputMode = .corrected
     var customPrompt: String = TranscriptionOutputMode.defaultCustomPrompt
     var customPostProcessingPrompts: [CustomPostProcessingPrompt] = []
-    var postProcessingEnabled = true
+    var postProcessingEnabled = false
     var copyToClipboard = false
     var historyEnabled = true
     var translationLanguage: LanguageOption = .english
