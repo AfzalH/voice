@@ -3,9 +3,9 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIST_DIR="$ROOT_DIR/dist"
-APP_NAME="SrizonVoice"
+APP_NAME="vBoard"
 APP_DIR="$DIST_DIR/$APP_NAME.app"
-EXECUTABLE_NAME="SrizonVoice"
+EXECUTABLE_NAME="vBoard"
 EXECUTABLE_DEST="$APP_DIR/Contents/MacOS/$EXECUTABLE_NAME"
 PLIST_PATH="$APP_DIR/Contents/Info.plist"
 VERSION="3.5.0"
@@ -78,9 +78,9 @@ cat > "$PLIST_PATH" <<'EOF'
   <key>CFBundleDevelopmentRegion</key>
   <string>en</string>
   <key>CFBundleDisplayName</key>
-  <string>SrizonVoice</string>
+  <string>vBoard</string>
   <key>CFBundleExecutable</key>
-  <string>SrizonVoice</string>
+  <string>vBoard</string>
   <key>CFBundleIconFile</key>
   <string>AppIcon</string>
   <key>CFBundleIdentifier</key>
@@ -88,7 +88,7 @@ cat > "$PLIST_PATH" <<'EOF'
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>
-  <string>SrizonVoice</string>
+  <string>vBoard</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
@@ -100,7 +100,7 @@ cat > "$PLIST_PATH" <<'EOF'
   <key>LSUIElement</key>
   <true/>
   <key>NSMicrophoneUsageDescription</key>
-  <string>SrizonVoice needs microphone access for dictation.</string>
+  <string>vBoard needs microphone access for dictation.</string>
 </dict>
 </plist>
 EOF
@@ -130,7 +130,7 @@ if command -v codesign >/dev/null 2>&1; then
   fi
   if [[ -n "$IDENTITY" && "$IDENTITY" != "-" ]]; then
     echo "Signing with identity: $IDENTITY"
-    ENTITLEMENTS="$ROOT_DIR/scripts/SrizonVoice.entitlements"
+    ENTITLEMENTS="$ROOT_DIR/scripts/vBoard.entitlements"
     codesign --force --deep --options runtime --timestamp \
       --entitlements "$ENTITLEMENTS" --sign "$IDENTITY" "$APP_DIR"
   else

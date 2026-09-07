@@ -415,7 +415,7 @@ final class GeminiTranscriptionClient {
         startRequest.setValue("audio/wav", forHTTPHeaderField: "X-Goog-Upload-Header-Content-Type")
         startRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
         startRequest.httpBody = try JSONSerialization.data(withJSONObject: [
-            "file": ["display_name": "SrizonVoice recording"]
+            "file": ["display_name": "vBoard recording"]
         ])
 
         let (startData, startResponse) = try await session.data(for: startRequest)

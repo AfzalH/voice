@@ -1,32 +1,28 @@
-# SrizonVoice
+# vBoard
+
+Formerly SrizonVoice. Same app, same settings; renamed to match the vBoard apps on iOS and Android.
 
 Push-to-talk dictation app for macOS 12 Monterey and later using Gemini audio transcription, automatic spoken-language detection, and optional translation (BYOK).
 
-Hold a key to dictate (push to talk), or tap another to record handsfree. Gemini detects the spoken language automatically (or follows the language hint you pick in the menu bar), then SrizonVoice lets you choose a post-processing action before inserting the final text wherever your cursor was.
+Hold a key to dictate (push to talk), or tap another to record handsfree. Gemini detects the spoken language automatically (or follows the language hint you pick in the menu bar), then vBoard lets you choose a post-processing action before inserting the final text wherever your cursor was.
 
-SrizonVoice is free. You only pay Google Gemini API usage through your own API key, which should be very low for typical dictation.
+vBoard is free. You only pay Google Gemini API usage through your own API key, which should be very low for typical dictation.
 
 ## Download
 
-Download the latest installer: [SrizonVoice-3.2.0.dmg](https://github.com/AfzalH/voice/releases/download/v3.2.0/SrizonVoice-3.2.0.dmg).
+Download the latest installer: [vBoard-3.5.0.dmg](https://github.com/AfzalH/voice/releases/download/v3.5.0/vBoard-3.5.0.dmg).
 
 Checksums and older builds are available on [GitHub Releases](https://github.com/AfzalH/voice/releases/latest).
 
 > [!WARNING]
 > **"Apple could not verify" Warning**
 >
-> Since SrizonVoice is not notarized by Apple yet, macOS Gatekeeper may block the app on first launch. To fix this, open Terminal and run:
->
-> ```sh
-> xattr -cr /Applications/SrizonVoice.app
-> ```
->
-> This removes the quarantine flag that macOS adds to downloaded apps. You only need to do this once.
+The app is signed with a Developer ID certificate and notarized by Apple, so it opens without Gatekeeper warnings.
 
 ## Setup
 
 1. Get a Gemini API key from [aistudio.google.com](https://aistudio.google.com/apikey)
-2. Launch SrizonVoice — Settings opens automatically on first run
+2. Launch vBoard — Settings opens automatically on first run
 3. Grant Microphone and Accessibility permissions
 4. Enter your Gemini API key, choose a model if needed, and click Save
 
@@ -52,7 +48,7 @@ swift run
 ./scripts/build-app.sh
 ```
 
-This produces `dist/SrizonVoice.app`. The bundle is signed with the first Apple Development / Developer ID identity found in your keychain (override with `CODESIGN_IDENTITY=...`, or `CODESIGN_IDENTITY=-` for ad-hoc). A stable identity is what lets macOS keep the Accessibility and Microphone grants across rebuilds.
+This produces `dist/vBoard.app`. The bundle is signed with the first Apple Development / Developer ID identity found in your keychain (override with `CODESIGN_IDENTITY=...`, or `CODESIGN_IDENTITY=-` for ad-hoc). A stable identity is what lets macOS keep the Accessibility and Microphone grants across rebuilds.
 
 ## Create distributable DMG
 
@@ -62,15 +58,15 @@ This produces `dist/SrizonVoice.app`. The bundle is signed with the first Apple 
 
 This produces:
 
-- `dist/SrizonVoice-3.2.0.dmg` — Installer disk image
-- `dist/SrizonVoice-3.2.0.sha256` — Checksum for verification
+- `dist/vBoard-3.5.0.dmg` — Installer disk image
+- `dist/vBoard-3.5.0.sha256` — Checksum for verification
 
 ## Install
 
 From DMG (recommended):
 
-1. Open `SrizonVoice-3.2.0.dmg`
-2. Drag `SrizonVoice.app` to the `Applications` folder
+1. Open `vBoard-3.5.0.dmg`
+2. Drag `vBoard.app` to the `Applications` folder
 3. Launch from Applications or Spotlight
 
 Upgrade in place, keeping settings, history, and permissions:
@@ -121,7 +117,7 @@ Removes the app, preferences, caches, permissions, and login item:
 
 ## Privacy
 
-SrizonVoice records audio locally and sends it directly to Gemini using your personal API key. If you choose a post-processing action, the transcript text is also sent to Gemini. No data passes through Srizon servers.
+vBoard records audio locally and sends it directly to Gemini using your personal API key. If you choose a post-processing action, the transcript text is also sent to Gemini. No data passes through Srizon servers.
 
 **Privacy Policy:** [https://www.srizon.com/privacy](https://www.srizon.com/privacy)
 

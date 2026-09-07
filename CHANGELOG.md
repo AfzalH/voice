@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to SrizonVoice will be documented in this file.
+All notable changes to vBoard will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Signing: the build script signs with a Developer ID or Apple Development certificate when one is present (hardened runtime + entitlements), so macOS keeps Microphone and Accessibility grants across rebuilds. New `scripts/upgrade-app.sh` upgrades in place without touching settings or permissions, and `scripts/notarize.sh` notarizes and staples the DMG.
 
 ### Changed
+- Renamed the app from SrizonVoice to vBoard, matching the iOS and Android apps. The bundle identifier stays `com.srizon.voice`, so existing settings, history, and permissions carry over. Remove the old `SrizonVoice.app` from Applications after installing `vBoard.app`.
 - Only Microphone and Accessibility permissions are required now. Input Monitoring is no longer requested up front; it is offered as an extra step only if macOS refuses the shortcut listener with Accessibility alone.
 - The recording island is now a small black pill just above the Dock, with six white dots that grow into bars with your voice and pulse in sequence while transcribing, instead of a wide bar at the top of the screen.
 - Push to talk no longer interferes with the shortcut key's normal function: a quick tap (under 200 ms) or a combination with another key (e.g. `fn`+`F1`, `Right ⌘`+`C`) is ignored, and the recording sound and island only appear once the key is clearly being held.
@@ -125,7 +126,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.0.0] - 2026-02-15
 
 ### Added
-- Initial release of SrizonVoice
+- Initial release of vBoard
 - Global hotkey toggle (default: Cmd+Shift+D) for dictation control
 - Gladia Live STT integration (BYOK - Bring Your Own Key)
 - Real-time audio capture (16kHz, 16-bit, mono PCM)

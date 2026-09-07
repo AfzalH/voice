@@ -2,15 +2,15 @@
 # Notarizes and staples the DMG produced by create-dmg.sh.
 #
 # One-time setup (stores an app-specific password in the keychain):
-#   xcrun notarytool store-credentials "SrizonVoice-Notary" \
+#   xcrun notarytool store-credentials "vBoard-Notary" \
 #     --apple-id "you@example.com" --team-id "TEAMID" --password "xxxx-xxxx-xxxx-xxxx"
 #
-# Usage: ./scripts/notarize.sh [dist/SrizonVoice-3.5.0.dmg]
+# Usage: ./scripts/notarize.sh [dist/vBoard-3.5.0.dmg]
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PROFILE="${NOTARY_PROFILE:-SrizonVoice-Notary}"
-DMG_PATH="${1:-$(ls -t "$ROOT_DIR"/dist/SrizonVoice-*.dmg 2>/dev/null | head -1)}"
+PROFILE="${NOTARY_PROFILE:-vBoard-Notary}"
+DMG_PATH="${1:-$(ls -t "$ROOT_DIR"/dist/vBoard-*.dmg 2>/dev/null | head -1)}"
 
 if [[ -z "$DMG_PATH" || ! -f "$DMG_PATH" ]]; then
   echo "No DMG found. Run scripts/create-dmg.sh first." >&2
@@ -20,8 +20,8 @@ fi
 APP_IN_DMG="$(hdiutil attach -nobrowse -readonly "$DMG_PATH" | awk -F'\t' '/\/Volumes\//{print $NF}')"
 trap 'hdiutil detach "$APP_IN_DMG" -quiet 2>/dev/null || true' EXIT
 echo "Checking signature of app inside DMG..."
-codesign --verify --deep --strict --verbose=2 "$APP_IN_DMG"/SrizonVoice.app
-SIGNATURE_INFO="$(codesign -dvv "$APP_IN_DMG"/SrizonVoice.app 2>&1 || true)"
+codesign --verify --deep --strict --verbose=2 "$APP_IN_DMG"/vBoard.app
+SIGNATURE_INFO="$(codesign -dvv "$APP_IN_DMG"/vBoard.app 2>&1 || true)"
 if [[ "$SIGNATURE_INFO" != *"Developer ID Application"* ]]; then
   echo "App is not signed with a Developer ID Application certificate; notarization will be rejected." >&2
   exit 1

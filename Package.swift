@@ -2,17 +2,17 @@
 import PackageDescription
 
 let package = Package(
-    name: "SrizonVoice",
+    name: "vBoard",
     platforms: [
         .macOS(.v12)
     ],
     products: [
-        .executable(name: "SrizonVoice", targets: ["SrizonVoice"])
+        .executable(name: "vBoard", targets: ["vBoard"])
     ],
     targets: [
         .executableTarget(
-            name: "SrizonVoice",
-            path: "Sources/SrizonVoice"
+            name: "vBoard",
+            path: "Sources/vBoard"
         )
     ]
 )

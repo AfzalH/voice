@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Script to create a distributable DMG for SrizonVoice
+# Script to create a distributable DMG for vBoard
 # with a professional background, drag-and-drop arrow, and icon layout.
 # Usage: ./scripts/create-dmg.sh
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIST_DIR="$ROOT_DIR/dist"
-APP_NAME="SrizonVoice"
+APP_NAME="vBoard"
 APP_BUNDLE="$DIST_DIR/$APP_NAME.app"
 VERSION="3.5.0"
 DMG_NAME="$APP_NAME-$VERSION"
@@ -27,7 +27,7 @@ NC='\033[0m'
 
 echo -e "${BLUE}Creating DMG for $APP_NAME v$VERSION${NC}"
 
-# Step 0: Detach any previously mounted SrizonVoice volumes to avoid name conflicts
+# Step 0: Detach any previously mounted vBoard volumes to avoid name conflicts
 for vol in /Volumes/$VOL_NAME /Volumes/"$VOL_NAME "*/; do
   if mount | grep -q "on ${vol%/} "; then
     dev=$(mount | grep "on ${vol%/} " | awk '{print $1}' | sed 's/s[0-9]*$//')

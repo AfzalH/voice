@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Rebuilds SrizonVoice and replaces the copy in /Applications in place,
+# Rebuilds vBoard and replaces the copy in /Applications in place,
 # keeping UserDefaults (settings, history) and TCC permissions.
 #
 # Permissions survive only when the new build is signed with the same stable
@@ -9,8 +9,8 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-APP_PATH="$ROOT_DIR/dist/SrizonVoice.app"
-TARGET_PATH="/Applications/SrizonVoice.app"
+APP_PATH="$ROOT_DIR/dist/vBoard.app"
+TARGET_PATH="/Applications/vBoard.app"
 
 "$ROOT_DIR/scripts/build-app.sh"
 
@@ -24,8 +24,8 @@ if [[ -d "$TARGET_PATH" ]]; then
   fi
 fi
 
-echo "Stopping running SrizonVoice (if any)..."
-pkill -x SrizonVoice 2>/dev/null || true
+echo "Stopping running vBoard (if any)..."
+pkill -x vBoard 2>/dev/null || true
 sleep 1
 
 echo "Replacing $TARGET_PATH ..."

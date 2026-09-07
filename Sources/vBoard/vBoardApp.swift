@@ -3,7 +3,7 @@ import Combine
 import SwiftUI
 
 @main
-struct SrizonVoiceApp: App {
+struct vBoardApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
     var body: some Scene {
@@ -72,7 +72,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if let button = statusItem.button {
             button.image = NSImage(
                 systemSymbolName: "mic.fill",
-                accessibilityDescription: "SrizonVoice"
+                accessibilityDescription: "vBoard"
             )
             button.image?.isTemplate = true
             button.target = self
@@ -130,7 +130,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let button = statusItem.button else { return }
         button.image = NSImage(
             systemSymbolName: "mic.fill",
-            accessibilityDescription: "SrizonVoice"
+            accessibilityDescription: "vBoard"
         )
         button.image?.isTemplate = true
         button.title = ""
@@ -206,9 +206,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - App Icon
 
-    /// Creates a simple programmatic app icon so SrizonVoice is recognizable
-    /// in permission dialogs, Activity Monitor, and the Dock (if shown).
+    /// Uses the bundled vBoard icon (shared with the iOS/Android apps) when running
+    /// from the .app bundle, and falls back to a drawn icon for `swift run`.
     private func setupAppIcon() {
+        if let url = Bundle.main.url(forResource: "AppIcon", withExtension: "icns"),
+           let bundled = NSImage(contentsOf: url)
+        {
+            NSApp.applicationIconImage = bundled
+            return
+        }
         let size = NSSize(width: 256, height: 256)
         let icon = NSImage(size: size, flipped: false) { rect in
             let backgroundPath = NSBezierPath(

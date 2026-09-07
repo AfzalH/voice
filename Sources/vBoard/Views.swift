@@ -395,7 +395,7 @@ struct SettingsView: View {
                     if !allPermissionsGranted {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .foregroundStyle(VoiceTheme.warning)
-                        Text("All permissions must be granted before you can use SrizonVoice.")
+                        Text("All permissions must be granted before you can use vBoard.")
                             .font(.caption)
                             .foregroundStyle(VoiceTheme.secondaryText)
                             .fixedSize(horizontal: false, vertical: true)

@@ -1,6 +1,6 @@
-# How SrizonVoice Works
+# How vBoard Works
 
-SrizonVoice is a macOS menu bar app that lets you dictate text into any application by pressing a hotkey. Press once to record, press again to transcribe with Gemini, choose an optional post-processing action, and insert the final text wherever your cursor was.
+vBoard is a macOS menu bar app that lets you dictate text into any application by pressing a hotkey. Press once to record, press again to transcribe with Gemini, choose an optional post-processing action, and insert the final text wherever your cursor was.
 
 ---
 
@@ -54,9 +54,9 @@ User presses Escape (while recording)
 
 ## App Entry Point & Menu Bar
 
-**Files:** `SrizonVoiceApp.swift`, `AppDelegate.swift`
+**Files:** `vBoardApp.swift`, `AppDelegate.swift`
 
-The app uses `@main` on `SrizonVoiceApp` (a SwiftUI `App`), but immediately hands off to an `NSApplicationDelegate` for everything meaningful. The activation policy is set to `.accessory` — no dock icon appears, and the app only lives in the menu bar.
+The app uses `@main` on `vBoardApp` (a SwiftUI `App`), but immediately hands off to an `NSApplicationDelegate` for everything meaningful. The activation policy is set to `.accessory` — no dock icon appears, and the app only lives in the menu bar.
 
 ### Status Item
 

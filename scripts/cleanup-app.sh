@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-TARGET_PATH="/Applications/SrizonVoice.app"
+TARGET_PATH="/Applications/vBoard.app"
 BUNDLE_ID="com.srizon.voice"
 
 # -- Clean up previous installation --
@@ -10,7 +10,7 @@ BUNDLE_ID="com.srizon.voice"
 echo "Cleaning up previous installation..."
 
 # Quit the app if it's running.
-pkill -x SrizonVoice 2>/dev/null && echo "  Stopped running SrizonVoice" || true
+pkill -x vBoard 2>/dev/null && echo "  Stopped running vBoard" || true
 sleep 0.5
 
 # Reset TCC permissions before removing the bundle, so macOS can still
@@ -51,7 +51,7 @@ rm -rf ~/Library/Caches/${BUNDLE_ID}
 rm -rf ~/Library/Saved\ Application\ State/${BUNDLE_ID}.savedState
 
 # Remove Login Items entry.
-osascript -e 'tell application "System Events" to delete (login items whose name is "SrizonVoice")' 2>/dev/null \
+osascript -e 'tell application "System Events" to delete (login items whose name is "vBoard")' 2>/dev/null \
     && echo "  Removed Login Items entry" || true
 
 echo "  Cleanup done."

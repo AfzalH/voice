@@ -92,7 +92,7 @@ final class RecordingIslandView: NSView {
     private static let dotSize: CGFloat = 3.5
     private static let dotSpacing: CGFloat = 4.5
     private static let maxBarHeight: CGFloat = 22
-    /// Warm near-black pill and almond-silk bars from the SrizonVoice palette.
+    /// Warm near-black pill and almond-silk bars from the vBoard palette.
     private static let pillColor = NSColor(hex: 0x15110E, alpha: 0.96)
     private static let barColor = NSColor.voiceAlmondSilk
 
@@ -255,7 +255,7 @@ final class SettingsWindowManager: NSObject, NSWindowDelegate {
             hosting.sizingOptions = .intrinsicContentSize
         }
         let newWindow = NSWindow(contentViewController: hosting)
-        newWindow.title = "SrizonVoice Settings"
+        newWindow.title = "vBoard Settings"
         newWindow.styleMask = [.titled, .closable, .miniaturizable, .resizable]
         newWindow.setContentSize(NSSize(width: 780, height: 610))
         newWindow.minSize = NSSize(width: 720, height: 520)
