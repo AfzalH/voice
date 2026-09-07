@@ -6,7 +6,7 @@ Push-to-talk dictation app for macOS 12 Monterey and later using Gemini audio tr
 
 Hold a key to dictate (push to talk), or tap another to record handsfree. Gemini detects the spoken language automatically (or follows the language hint you pick in the menu bar), then vBoard lets you choose a post-processing action before inserting the final text wherever your cursor was.
 
-vBoard is free. You only pay Google Gemini API usage through your own API key, which should be very low for typical dictation.
+vBoard is free. You only pay Google Gemini API usage through your own API key, which is billed by Google: light use costs cents, heavy daily dictation typically $1–2 a month.
 
 ## Download
 
