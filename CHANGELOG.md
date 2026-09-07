@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [3.6.0] - 2026-09-07
 
+### Added
+- Settings footer links to vBoard for iPhone and Android and to srizon.com/vboard.
+
 ### Changed
 - Post-processing is now off by default for new installs; transcripts are inserted immediately. Turn it on in Settings or from the menu-bar popover to get the floating polish panel.
 - `gemini-3.1-flash-lite` is the default model. `gemini-2.5-flash-lite` was removed from the model switcher; installs that had it selected move to Gemini 3.1 automatically.

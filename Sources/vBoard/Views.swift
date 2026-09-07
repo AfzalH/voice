@@ -463,6 +463,24 @@ struct SettingsView: View {
                 .padding(.horizontal, 24)
                 .padding(.vertical, 12)
                 .background(VoiceTheme.surface)
+
+                // Cross-sell footer
+                HStack(spacing: 6) {
+                    Image(systemName: "iphone.gen3")
+                        .foregroundStyle(VoiceTheme.secondaryText)
+                    Text("Need the same on your phone?")
+                        .foregroundStyle(VoiceTheme.secondaryText)
+                    Link("vBoard for iPhone", destination: URL(string: "https://apps.apple.com/us/app/vboard/id6797043658")!)
+                    Text("·").foregroundStyle(VoiceTheme.secondaryText)
+                    Link("vBoard for Android", destination: URL(string: "https://play.google.com/store/apps/details?id=com.srizon.vboard")!)
+                    Spacer()
+                    Link("srizon.com/vboard", destination: URL(string: "https://www.srizon.com/vboard")!)
+                        .foregroundStyle(VoiceTheme.secondaryText)
+                }
+                .font(.caption)
+                .padding(.horizontal, 24)
+                .padding(.vertical, 8)
+                .background(VoiceTheme.background)
             }
         }
         .frame(width: 780, height: 610)
