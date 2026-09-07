@@ -26,6 +26,12 @@ fi
 
 echo "Stopping running vBoard (if any)..."
 pkill -x vBoard 2>/dev/null || true
+# Pre-3.5 installs were named SrizonVoice.app; clear it out so only vBoard remains.
+if [[ -d "/Applications/SrizonVoice.app" ]]; then
+  pkill -x SrizonVoice 2>/dev/null || true
+  rm -rf "/Applications/SrizonVoice.app"/* 2>/dev/null || true
+  rmdir "/Applications/SrizonVoice.app" 2>/dev/null || echo "  Please move the empty /Applications/SrizonVoice.app to the Trash."
+fi
 sleep 1
 
 echo "Replacing $TARGET_PATH ..."
